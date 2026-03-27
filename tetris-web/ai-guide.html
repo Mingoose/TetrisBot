@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Builder Guide — Tetris</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #0d0d1a;
+      color: #aaaacc;
+      font-family: monospace;
+      line-height: 1.7;
+      padding: 40px 20px 80px;
+    }
+
+    .page {
+      max-width: 760px;
+      margin: 0 auto;
+    }
+
+    h1 {
+      color: #aaaaff;
+      font-size: 22px;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+      border-bottom: 1px solid #2a2a4a;
+      padding-bottom: 14px;
+      margin-bottom: 32px;
+    }
+
+    h2 {
+      color: #8888cc;
+      font-size: 13px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      margin: 36px 0 14px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid #1e1e36;
+    }
+
+    h3 {
+      color: #7777bb;
+      font-size: 12px;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      margin: 22px 0 8px;
+    }
+
+    p {
+      font-size: 13px;
+      margin-bottom: 10px;
+      color: #9999bb;
+    }
+
+    a {
+      color: #7788ff;
+      text-decoration: none;
+    }
+    a:hover { text-decoration: underline; }
+
+    code {
+      background: #14142a;
+      border: 1px solid #252545;
+      color: #ccccff;
+      padding: 1px 6px;
+      font-size: 12px;
+      font-family: monospace;
+    }
+
+    pre {
+      background: #0b0b1a;
+      border: 1px solid #1e1e3a;
+      padding: 18px 20px;
+      overflow-x: auto;
+      font-size: 12px;
+      line-height: 1.6;
+      color: #ccccee;
+      margin: 10px 0 16px;
+    }
+
+    pre .comment { color: #555577; }
+    pre .key     { color: #aaaaff; }
+    pre .str     { color: #88cc88; }
+    pre .kw      { color: #cc88cc; }
+    pre .num     { color: #ffcc88; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+      margin: 10px 0 16px;
+    }
+
+    th {
+      text-align: left;
+      color: #6666aa;
+      border-bottom: 1px solid #252545;
+      padding: 6px 10px 6px 0;
+      font-weight: normal;
+      letter-spacing: 1px;
+    }
+
+    td {
+      padding: 7px 10px 7px 0;
+      border-bottom: 1px solid #14142a;
+      vertical-align: top;
+      color: #9999bb;
+    }
+
+    td:first-child { color: #ccccff; white-space: nowrap; }
+    td:nth-child(2) { color: #88cc88; white-space: nowrap; padding-right: 16px; }
+
+    .callout {
+      border-left: 3px solid #3a3a6a;
+      background: #0e0e20;
+      padding: 12px 16px;
+      margin: 10px 0 16px;
+      font-size: 12px;
+    }
+
+    .callout.warn {
+      border-left-color: #6a4a2a;
+      background: #181008;
+    }
+
+    .callout.tip {
+      border-left-color: #2a4a2a;
+      background: #0a120a;
+    }
+
+    .callout p { margin-bottom: 4px; color: #9999bb; }
+    .callout p:last-child { margin-bottom: 0; }
+
+    .callout strong { color: #aaaacc; }
+
+    .badge {
+      display: inline-block;
+      font-size: 10px;
+      letter-spacing: 1px;
+      padding: 2px 6px;
+      border: 1px solid #2a2a4a;
+      color: #555577;
+      margin-left: 6px;
+      vertical-align: middle;
+    }
+
+    ul {
+      padding-left: 20px;
+      font-size: 13px;
+      color: #9999bb;
+      margin-bottom: 10px;
+    }
+    ul li { margin-bottom: 4px; }
+
+    .section-num {
+      color: #444466;
+      margin-right: 8px;
+    }
+
+    .back {
+      display: inline-block;
+      color: #555577;
+      font-size: 11px;
+      letter-spacing: 1px;
+      margin-bottom: 28px;
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+
+    <a class="back" href="/">&larr; BACK TO GAME</a>
+
+    <h1>Building a Custom AI</h1>
+
+    <p>
+      You can write a JavaScript AI and upload it to compete in Versus and Bot vs Bot modes.
+      Your file runs in a sandboxed Web Worker — write it as a plain <code>.js</code> file
+      with a single exported function, and the game handles the rest.
+    </p>
+
+    <!-- ── QUICK START ─────────────────────────────────────────── -->
+    <h2><span class="section-num">01</span> Quick Start</h2>
+
+    <p>
+      The fastest way to get started is to copy <code>example-ai.js</code> from the repo root.
+      It already implements a working greedy one-piece lookahead AI.
+    </p>
+
+    <ol style="padding-left:20px; font-size:13px; color:#9999bb; margin-bottom:14px;">
+      <li style="margin-bottom:6px;">Copy or download <code>example-ai.js</code>.</li>
+      <li style="margin-bottom:6px;">From the main menu, click <strong style="color:#aaaacc">VS AI</strong> or <strong style="color:#aaaacc">WATCH</strong>.</li>
+      <li style="margin-bottom:6px;">Click <strong style="color:#aaaacc">MANAGE AI</strong> (or the AI Manager button), then <strong style="color:#aaaacc">+ Upload .js AI file</strong>.</li>
+      <li style="margin-bottom:6px;">Select your file — it appears in the list immediately.</li>
+      <li>Select it and click <strong style="color:#aaaacc">Done</strong>, then start the game.</li>
+    </ol>
+
+    <div class="callout tip">
+      <p>Your AI is stored in <code>localStorage</code> and persists across sessions. You can upload multiple AIs and switch between them in the AI Manager.</p>
+    </div>
+
+    <!-- ── REQUIRED INTERFACE ─────────────────────────────────── -->
+    <h2><span class="section-num">02</span> Required Interface</h2>
+
+    <p>
+      Your file must define a function named exactly <code>getBestMove</code> at the top level:
+    </p>
+
+    <pre><span class="kw">function</span> <span class="key">getBestMove</span>(bot, pendingGarbage) {
+  <span class="comment">// Analyze bot state and return a move.</span>
+  <span class="kw">return</span> { rotationIndex, x, y, useHold };
+}</pre>
+
+    <div class="callout warn">
+      <p><strong>Do not</strong> define <code>self.onmessage</code> — the game injects its own message handler that calls your function. Defining it yourself will break the integration.</p>
+      <p><strong>Do not</strong> use ES module syntax (<code>import</code> / <code>export</code>). Write everything in a single self-contained plain JS file.</p>
+    </div>
+
+    <!-- ── INPUT: bot ─────────────────────────────────────────── -->
+    <h2><span class="section-num">03</span> Input: the <code>bot</code> object</h2>
+
+    <p>Called once per piece spawn. <code>bot</code> contains the full game state your AI needs:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Field</th>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>bot.board</td>
+          <td>number[][]</td>
+          <td>20 rows × 10 columns. <code>0</code> = empty cell, non-zero = filled.</td>
+        </tr>
+        <tr>
+          <td>bot.active</td>
+          <td>object</td>
+          <td>The currently falling piece — see sub-fields below.</td>
+        </tr>
+        <tr>
+          <td>&nbsp;&nbsp;.type</td>
+          <td>string</td>
+          <td>Piece letter: <code>'I' 'O' 'T' 'S' 'Z' 'J' 'L'</code></td>
+        </tr>
+        <tr>
+          <td>&nbsp;&nbsp;.rotationIndex</td>
+          <td>0–3</td>
+          <td>Current rotation state of the spawned piece.</td>
+        </tr>
+        <tr>
+          <td>&nbsp;&nbsp;.x</td>
+          <td>number</td>
+          <td>Column of the bounding-box left edge (spawn position).</td>
+        </tr>
+        <tr>
+          <td>&nbsp;&nbsp;.y</td>
+          <td>number</td>
+          <td>Row of the bounding-box top edge (spawn position).</td>
+        </tr>
+        <tr>
+          <td>bot.nextQueue</td>
+          <td>string[]</td>
+          <td>Next 5 upcoming piece types (index 0 = next).</td>
+        </tr>
+        <tr>
+          <td>bot.hold</td>
+          <td>string | null</td>
+          <td>Piece currently in the hold slot, or <code>null</code> if empty.</td>
+        </tr>
+        <tr>
+          <td>bot.holdUsed</td>
+          <td>boolean</td>
+          <td><code>true</code> if hold has already been used this turn (can't hold again).</td>
+        </tr>
+        <tr>
+          <td>bot.bagState</td>
+          <td>string[]</td>
+          <td>Remaining pieces in the current 7-bag. Useful for deep lookahead.</td>
+        </tr>
+        <tr>
+          <td>bot.lines</td>
+          <td>number</td>
+          <td>Total lines cleared so far this game.</td>
+        </tr>
+        <tr>
+          <td>bot.dead</td>
+          <td>boolean</td>
+          <td><code>true</code> if the bot has topped out (game over).</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>board coordinate system</h3>
+    <p>
+      <code>bot.board[0]</code> is the top row, <code>bot.board[19]</code> is the bottom row.
+      Columns run left (0) to right (9). A piece at <code>x=3, y=0</code> is near the top-center
+      of the board.
+    </p>
+
+    <!-- ── INPUT: pendingGarbage ──────────────────────────────── -->
+    <h2><span class="section-num">04</span> Input: <code>pendingGarbage</code></h2>
+
+    <p>
+      A <code>number</code> representing garbage lines that will arrive at the bottom of your board
+      soon. A value of <code>0</code> means no incoming garbage. Use this to decide whether to
+      play aggressively (clear lines fast to cancel garbage) or stack normally.
+    </p>
+
+    <!-- ── RETURN VALUE ──────────────────────────────────────── -->
+    <h2><span class="section-num">05</span> Return value</h2>
+
+    <p>Return a plain object with these four fields:</p>
+
+    <table>
+      <thead>
+        <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>rotationIndex</td>
+          <td>0–3</td>
+          <td>Rotation state the piece should be in when it lands.</td>
+        </tr>
+        <tr>
+          <td>x</td>
+          <td>0–9</td>
+          <td>Column of the bounding-box left edge at the landing position.</td>
+        </tr>
+        <tr>
+          <td>y</td>
+          <td>0–19</td>
+          <td>Row of the bounding-box top edge at the landing position (after hard drop).</td>
+        </tr>
+        <tr>
+          <td>useHold</td>
+          <td>boolean</td>
+          <td>If <code>true</code>, the hold mechanic fires before the piece is placed.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="callout">
+      <p>The easiest way to find a valid <code>y</code> is to compute a hard-drop: drop the piece down from row 0 until it collides — that landing row is your <code>y</code>. See <code>hardDropY()</code> in the example.</p>
+    </div>
+
+    <!-- ── CONSTRAINTS ───────────────────────────────────────── -->
+    <h2><span class="section-num">06</span> Constraints</h2>
+
+    <table>
+      <thead>
+        <tr><th>Constraint</th><th>Detail</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>2-second timeout</td>
+          <td>If <code>getBestMove</code> does not return within 2 s, your worker is terminated and the game falls back to the built-in AI for the remainder of the match.</td>
+        </tr>
+        <tr>
+          <td>No network</td>
+          <td><code>fetch</code>, <code>XMLHttpRequest</code>, <code>WebSocket</code>, and <code>importScripts</code> are all blocked.</td>
+        </tr>
+        <tr>
+          <td>Single file</td>
+          <td>All code must live in one <code>.js</code> file. No ES module imports.</td>
+        </tr>
+        <tr>
+          <td>No <code>self.onmessage</code></td>
+          <td>The game injects the worker message handler. Defining your own will break the integration.</td>
+        </tr>
+        <tr>
+          <td>Synchronous only</td>
+          <td><code>getBestMove</code> must return synchronously — async functions / Promises are not supported.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- ── HELPER FUNCTIONS ──────────────────────────────────── -->
+    <h2><span class="section-num">07</span> Helper functions you'll need</h2>
+
+    <p>
+      Because your file runs in isolation you must include your own board-manipulation utilities.
+      These three are the essential building blocks — copy them from <code>example-ai.js</code>:
+    </p>
+
+    <h3>Piece rotation matrices</h3>
+    <p>
+      Each piece has 4 rotation states. Copy the <code>PIECES</code> constant from the example —
+      it's a map of piece type → array of four 2D rotation grids.
+    </p>
+
+    <h3><code>collides(board, rotation, x, y)</code></h3>
+    <p>
+      Returns <code>true</code> if placing <code>rotation</code> at <code>(x, y)</code> overlaps
+      a filled cell or goes out of bounds. Used by the other helpers.
+    </p>
+
+    <pre><span class="kw">function</span> <span class="key">collides</span>(board, rotation, x, y) {
+  <span class="kw">for</span> (<span class="kw">let</span> r = <span class="num">0</span>; r &lt; rotation.length; r++) {
+    <span class="kw">for</span> (<span class="kw">let</span> c = <span class="num">0</span>; c &lt; rotation[r].length; c++) {
+      <span class="kw">if</span> (!rotation[r][c]) <span class="kw">continue</span>;
+      <span class="kw">const</span> row = y + r, col = x + c;
+      <span class="kw">if</span> (col &lt; <span class="num">0</span> || col &gt;= <span class="num">10</span> || row &gt;= <span class="num">20</span>) <span class="kw">return true</span>;
+      <span class="kw">if</span> (row &gt;= <span class="num">0</span> &amp;&amp; board[row][col] !== <span class="num">0</span>) <span class="kw">return true</span>;
+    }
+  }
+  <span class="kw">return false</span>;
+}</pre>
+
+    <h3><code>hardDropY(board, rotation, x)</code></h3>
+    <p>
+      Returns the lowest row a piece can reach by dropping straight down from row 0.
+    </p>
+
+    <pre><span class="kw">function</span> <span class="key">hardDropY</span>(board, rotation, x) {
+  <span class="kw">let</span> y = <span class="num">0</span>;
+  <span class="kw">while</span> (!collides(board, rotation, x, y + <span class="num">1</span>)) y++;
+  <span class="kw">return</span> y;
+}</pre>
+
+    <h3><code>lockAndClear(board, rotation, x, y)</code></h3>
+    <p>
+      Returns a new board with the piece placed at <code>(x, y)</code> and all full rows removed.
+      Also returns <code>linesCleared</code> for scoring.
+    </p>
+
+    <pre><span class="kw">function</span> <span class="key">lockAndClear</span>(board, rotation, x, y) {
+  <span class="kw">const</span> b = board.map(row =&gt; [...row]);
+  <span class="kw">for</span> (<span class="kw">let</span> r = <span class="num">0</span>; r &lt; rotation.length; r++)
+    <span class="kw">for</span> (<span class="kw">let</span> c = <span class="num">0</span>; c &lt; rotation[r].length; c++)
+      <span class="kw">if</span> (rotation[r][c] &amp;&amp; y + r &gt;= <span class="num">0</span>) b[y + r][x + c] = <span class="num">1</span>;
+  <span class="kw">const</span> kept = b.filter(row =&gt; row.some(v =&gt; v === <span class="num">0</span>));
+  <span class="kw">const</span> cleared = <span class="num">20</span> - kept.length;
+  <span class="kw">const</span> empty = Array.from({ length: cleared }, () =&gt; <span class="kw">new</span> Array(<span class="num">10</span>).fill(<span class="num">0</span>));
+  <span class="kw">return</span> { board: [...empty, ...kept], linesCleared: cleared };
+}</pre>
+
+    <!-- ── EVALUATION ─────────────────────────────────────────── -->
+    <h2><span class="section-num">08</span> Writing an evaluation function</h2>
+
+    <p>
+      Your evaluation function scores a board state — <strong>higher = better</strong>.
+      A common starting set of heuristics:
+    </p>
+
+    <table>
+      <thead>
+        <tr><th>Heuristic</th><th>Typical weight</th><th>Notes</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Aggregate height</td>
+          <td>−0.5 per unit</td>
+          <td>Sum of all column heights. Penalises tall stacks.</td>
+        </tr>
+        <tr>
+          <td>Holes</td>
+          <td>−0.8 per hole</td>
+          <td>Empty cells with a filled cell directly above. Very bad — they're hard to clear.</td>
+        </tr>
+        <tr>
+          <td>Bumpiness</td>
+          <td>−0.3 per unit</td>
+          <td>Sum of absolute height differences between adjacent columns. Rewards flat boards.</td>
+        </tr>
+        <tr>
+          <td>Lines cleared</td>
+          <td>+0 / +1 / +2.5 / +5</td>
+          <td>Reward clearing 2, 3, or 4 lines. Clearing 1 line alone is roughly break-even.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>
+      Tune the weights to change your AI's play style. Heavier hole penalties make the AI
+      prioritise clean stacking; heavier line-clear bonuses encourage aggressive Tetris setups.
+    </p>
+
+    <h3>Using lookahead</h3>
+    <p>
+      For stronger play, simulate placements for the next piece too (two-piece lookahead).
+      <code>bot.nextQueue[0]</code> is the next piece, <code>bot.nextQueue[1..4]</code> are the
+      pieces after that, and <code>bot.bagState</code> contains the rest of the current 7-bag.
+      Multi-piece search grows exponentially — stay well under 2 s.
+    </p>
+
+    <!-- ── EXAMPLE WALKTHROUGH ───────────────────────────────── -->
+    <h2><span class="section-num">09</span> Annotated example: <code>example-ai.js</code></h2>
+
+    <p>The full source with inline annotations:</p>
+
+    <pre><span class="comment">// ── 1. Piece rotation matrices ──────────────────────────────────
+// Required: the game doesn't provide these to you, so include them.</span>
+<span class="kw">const</span> <span class="key">PIECES</span> = {
+  I: [ <span class="comment">/* 4 rotations × 4×4 grid */</span> ],
+  T: [ <span class="comment">/* 4 rotations × 3×3 grid */</span> ],
+  <span class="comment">// ... O, S, Z, J, L</span>
+};
+
+<span class="comment">// ── 2. Board utilities ──────────────────────────────────────────
+// collides, hardDropY, lockAndClear — see Section 07 above.</span>
+
+<span class="comment">// ── 3. Evaluation function ──────────────────────────────────────
+// Returns a score — higher is better.</span>
+<span class="kw">function</span> <span class="key">evaluate</span>(board, linesCleared) {
+  <span class="comment">// Compute column heights and hole count.</span>
+  <span class="comment">// Return weighted sum of heuristics.</span>
+  <span class="kw">return</span> -<span class="num">0.5</span> * aggHeight + lineClearScore - <span class="num">0.8</span> * holes - <span class="num">0.3</span> * bumpiness;
+}
+
+<span class="comment">// ── 4. Move finder ──────────────────────────────────────────────
+// Try every (rotation, column) combination; return the best one.</span>
+<span class="kw">function</span> <span class="key">bestPlacementFor</span>(board, pieceType) {
+  <span class="kw">let</span> best = <span class="kw">null</span>, bestScore = -Infinity;
+  <span class="kw">for</span> (<span class="kw">let</span> rot = <span class="num">0</span>; rot &lt; <span class="num">4</span>; rot++) {
+    <span class="kw">const</span> rotation = PIECES[pieceType][rot];
+    <span class="kw">for</span> (<span class="kw">let</span> x = <span class="num">0</span>; x &lt;= <span class="num">10</span> - rotation[<span class="num">0</span>].length; x++) {
+      <span class="kw">if</span> (collides(board, rotation, x, <span class="num">0</span>)) <span class="kw">continue</span>; <span class="comment">// column blocked at spawn</span>
+      <span class="kw">const</span> y = hardDropY(board, rotation, x);
+      <span class="kw">const</span> { board: result, linesCleared } = lockAndClear(board, rotation, x, y);
+      <span class="kw">const</span> score = evaluate(result, linesCleared);
+      <span class="kw">if</span> (score &gt; bestScore) { bestScore = score; best = { rotationIndex: rot, x, y, score }; }
+    }
+  }
+  <span class="kw">return</span> best;
+}
+
+<span class="comment">// ── 5. Main entry point ─────────────────────────────────────────
+// The game calls this function each time a new piece spawns.</span>
+<span class="kw">function</span> <span class="key">getBestMove</span>(bot, pendingGarbage) {
+  <span class="kw">const</span> active = bestPlacementFor(bot.board, bot.active.type);
+
+  <span class="comment">// Optionally consider hold: if hold gives a better score, use it.</span>
+  <span class="kw">if</span> (!bot.holdUsed) {
+    <span class="kw">const</span> holdType = bot.hold ?? bot.nextQueue[<span class="num">0</span>];
+    <span class="kw">const</span> fromHold = bestPlacementFor(bot.board, holdType);
+    <span class="kw">if</span> (fromHold &amp;&amp; active &amp;&amp; fromHold.score &gt; active.score + <span class="num">0.5</span>)
+      <span class="kw">return</span> { ...fromHold, useHold: <span class="kw">true</span> };
+  }
+
+  <span class="kw">if</span> (active) <span class="kw">return</span> { ...active, useHold: <span class="kw">false</span> };
+
+  <span class="comment">// Fallback: stay in place (should rarely happen).</span>
+  <span class="kw">return</span> { rotationIndex: <span class="num">0</span>, x: bot.active.x, y: bot.active.y, useHold: <span class="kw">false</span> };
+}</pre>
+
+    <!-- ── TIPS ───────────────────────────────────────────────── -->
+    <h2><span class="section-num">10</span> Tips for stronger play</h2>
+
+    <ul>
+      <li>Start with the example, verify it uploads and plays, then tune weights in <code>evaluate()</code>.</li>
+      <li>Add a two-piece lookahead: for each candidate placement of the active piece, run <code>bestPlacementFor</code> on the resulting board with <code>bot.nextQueue[0]</code>.</li>
+      <li>React to <code>pendingGarbage &gt; 4</code> by temporarily weighting line clears more heavily.</li>
+      <li>Keep a well column (one intentionally low column) for Tetris setups — the built-in AI does this explicitly.</li>
+      <li>Use <code>console.log()</code> freely — output appears in the browser DevTools console and doesn't affect play.</li>
+      <li>Profile with <code>performance.now()</code> to ensure you stay comfortably under the 2 s limit even on slow machines.</li>
+    </ul>
+
+  </div>
+</body>
+</html>

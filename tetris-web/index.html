@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tetris</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #0d0d1a;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      font-family: monospace;
+    }
+    canvas {
+      display: block;
+      image-rendering: pixelated;
+    }
+
+    /* AI manager overlay */
+    #ai-manager {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.82);
+      z-index: 10;
+      justify-content: center;
+      align-items: center;
+    }
+    .ai-panel {
+      background: #12122a;
+      border: 1px solid #2a2a4a;
+      width: 440px;
+      max-height: 80vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .ai-panel-header {
+      padding: 16px 20px 12px;
+      border-bottom: 1px solid #2a2a4a;
+      color: #aaaaff;
+      font-size: 16px;
+      font-weight: bold;
+      letter-spacing: 2px;
+    }
+    .ai-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 6px 0;
+      min-height: 60px;
+    }
+    .ai-item {
+      display: flex;
+      align-items: center;
+      padding: 10px 20px;
+      cursor: pointer;
+      border-bottom: 1px solid #1a1a32;
+      gap: 12px;
+    }
+    .ai-item:hover { background: #1a1a38; }
+    .ai-item.selected { background: #1c1c42; }
+    .ai-radio {
+      width: 13px;
+      height: 13px;
+      border-radius: 50%;
+      border: 2px solid #444466;
+      flex-shrink: 0;
+    }
+    .ai-item.selected .ai-radio { border-color: #aaaaff; background: #aaaaff; }
+    .ai-name {
+      flex: 1;
+      color: #aaaacc;
+      font-size: 13px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .ai-item.selected .ai-name { color: #ffffff; }
+    .ai-badge {
+      font-size: 10px;
+      color: #555577;
+      padding: 2px 6px;
+      border: 1px solid #2a2a4a;
+      flex-shrink: 0;
+      letter-spacing: 1px;
+    }
+    .ai-item.selected .ai-badge { color: #8888cc; border-color: #3a3a6a; }
+    .ai-delete {
+      background: none;
+      border: 1px solid #442222;
+      color: #884444;
+      font-family: monospace;
+      font-size: 11px;
+      padding: 3px 8px;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .ai-delete:hover { background: #2a1010; border-color: #884444; color: #ff6666; }
+    .ai-panel-footer {
+      display: flex;
+      gap: 10px;
+      padding: 14px 20px;
+      border-top: 1px solid #2a2a4a;
+    }
+    .ai-upload-label {
+      flex: 1;
+      background: #14142a;
+      border: 1px solid #333355;
+      color: #8888aa;
+      font-family: monospace;
+      font-size: 12px;
+      padding: 9px 14px;
+      cursor: pointer;
+      text-align: center;
+      display: block;
+    }
+    .ai-upload-label:hover { background: #1c1c3a; border-color: #5555aa; color: #aaaacc; }
+    .ai-done-btn {
+      background: #0e1e0e;
+      border: 1px solid #2a4a2a;
+      color: #55aa55;
+      font-family: monospace;
+      font-size: 12px;
+      padding: 9px 22px;
+      cursor: pointer;
+    }
+    .ai-done-btn:hover { background: #162616; border-color: #448844; color: #88cc88; }
+
+    /* Auth overlay */
+    #auth-overlay {
+      position: fixed;
+      inset: 0;
+      background: #0d0d1a;
+      z-index: 20;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+    .auth-panel {
+      background: #12122a;
+      border: 1px solid #2a2a4a;
+      width: 340px;
+      padding: 32px 28px 28px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    .auth-title {
+      color: #aaaaff;
+      font-size: 16px;
+      font-weight: bold;
+      letter-spacing: 2px;
+      margin-bottom: 4px;
+    }
+    .auth-input {
+      background: #0b0b1a;
+      border: 1px solid #2a2a4a;
+      color: #ccccee;
+      font-family: monospace;
+      font-size: 13px;
+      padding: 9px 12px;
+      width: 100%;
+      outline: none;
+    }
+    .auth-input:focus { border-color: #5555aa; }
+    .auth-submit {
+      background: #0e1e0e;
+      border: 1px solid #2a4a2a;
+      color: #55aa55;
+      font-family: monospace;
+      font-size: 13px;
+      padding: 10px;
+      cursor: pointer;
+      width: 100%;
+    }
+    .auth-submit:hover { background: #162616; border-color: #448844; color: #88cc88; }
+    .auth-toggle {
+      color: #555577;
+      font-size: 12px;
+      text-align: center;
+      cursor: pointer;
+    }
+    .auth-toggle span { color: #7777bb; cursor: pointer; }
+    .auth-toggle span:hover { color: #aaaaff; }
+    .auth-error {
+      color: #ff6666;
+      font-size: 12px;
+      min-height: 16px;
+    }
+
+    .ai-info-btn {
+      background: none;
+      border: none;
+      color: #444466;
+      font-family: monospace;
+      font-size: 15px;
+      cursor: pointer;
+      padding: 0 4px;
+      line-height: 1;
+      text-decoration: none;
+    }
+    .ai-info-btn:hover { color: #8888cc; }
+  </style>
+</head>
+<body>
+  <div id="auth-overlay">
+    <div class="auth-panel">
+      <div class="auth-title" id="auth-title">SIGN IN</div>
+      <input class="auth-input" id="auth-email" type="email" placeholder="email" autocomplete="email" />
+      <input class="auth-input" id="auth-password" type="password" placeholder="password" autocomplete="current-password" />
+      <div class="auth-error" id="auth-error"></div>
+      <button class="auth-submit" id="auth-submit">Sign In</button>
+      <div class="auth-toggle">
+        <span id="auth-toggle-link">Need an account? Sign up</span>
+      </div>
+    </div>
+  </div>
+
+  <canvas id="game" tabindex="0"></canvas>
+
+  <div id="ai-manager" style="display:none">
+    <div class="ai-panel">
+      <div class="ai-panel-header" style="display:flex;align-items:center;justify-content:space-between;">
+        <span>AI MANAGER</span>
+        <a class="ai-info-btn" href="/ai-guide.html" target="_blank" title="How to build an AI">?</a>
+      </div>
+      <div class="ai-list" id="ai-list"></div>
+      <div class="ai-panel-footer">
+        <label class="ai-upload-label">
+          + Upload .js AI file
+          <input id="ai-upload" type="file" accept=".js" style="display:none">
+        </label>
+        <button class="ai-done-btn" id="ai-done-btn">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
