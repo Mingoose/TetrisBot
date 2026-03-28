@@ -132,7 +132,7 @@ function createModal(
     versusTitle.textContent = 'Versus';
     Object.assign(versusTitle.style, { margin: '18px 0 10px', fontSize: '14px', color: '#aaaaff' });
     slidersEl.appendChild(versusTitle);
-    slidersEl.appendChild(makeSlider('Bot speed — pieces per second', 'pps', 0.5, 5, 0.1, () => pendingBotPps, (v) => { pendingBotPps = v; }));
+    slidersEl.appendChild(makeSlider('Bot speed — pieces per second', 'pps', 0.5, 2, 0.1, () => pendingBotPps, (v) => { pendingBotPps = v; }));
   }
   refreshSliders();
 

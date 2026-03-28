@@ -50,6 +50,6 @@ export async function loadSettings(userId: string): Promise<Settings> {
     das: saved?.das ?? DEFAULT_DAS,
     arr: saved?.arr ?? DEFAULT_ARR,
     sonicDrop: saved?.sonicDrop ?? DEFAULT_SONIC_DROP,
-    botPps: Math.max(0.1, saved?.botPps ?? DEFAULT_BOT_PPS),
+    botPps: Math.min(2, Math.max(0.1, saved?.botPps ?? DEFAULT_BOT_PPS)),
   };
 }
