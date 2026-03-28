@@ -5,8 +5,6 @@ export interface InputState {
   // Prevent key repeat for one-shot actions
   justPressed: Set<string>;
   justReleased: Set<string>;
-  // Track previous frame's held keys for edge detection
-  prevKeys: Set<string>;
 }
 
 export const DAS_MS = 133;
@@ -19,7 +17,6 @@ export function createInputState(): InputState {
     dasRight: 0,
     justPressed: new Set(),
     justReleased: new Set(),
-    prevKeys: new Set(),
   };
 }
 
@@ -55,5 +52,4 @@ export function isHeld(input: InputState, code: string): boolean {
 export function flushInput(input: InputState): void {
   input.justPressed.clear();
   input.justReleased.clear();
-  input.prevKeys = new Set(input.keys);
 }

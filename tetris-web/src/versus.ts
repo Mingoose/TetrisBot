@@ -1,10 +1,10 @@
-import { ActivePiece, CellValue, PieceType, GameState } from './types';
+import { ActivePiece, CellValue, PieceType } from './types';
 import { Bag } from './bag';
 import {
   emptyBoard, collides, lockPiece, clearLines, isGameOver, hardDropY,
   addGarbageLines, countTSpinCorners, BOARD_COLS,
 } from './board';
-import { setLockHook, spawnPiece } from './game';
+import { setLockHook, spawnPiece, NEXT_QUEUE_SIZE } from './game';
 
 // Jstris combo bonus table (0-indexed: 0 = first consecutive clear).
 export const COMBO_TABLE = [0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 4, 5] as const;
@@ -28,6 +28,9 @@ export interface BotBoard {
   pieceIndex: number;
   lines: number;
   dead: boolean;
+  // Combat state mirrored here so the AI worker receives it with each move request.
+  combo: number;      // -1 = no streak; mirrors CombatState.combo
+  b2bActive: boolean; // mirrors CombatState.b2bActive
 }
 
 export interface BotVsBotData {
@@ -52,7 +55,6 @@ export interface VersusData {
 }
 
 // ---- Bot bag — used only for versus/watch mode (single bot, pieceIndex = -1) ----
-const NEXT_QUEUE_SIZE = 5;
 let botBag = new Bag();
 
 // ---- Shared piece sequence for bot-vs-bot ----
@@ -90,6 +92,8 @@ function initBotBoard(): BotBoard {
     pieceIndex: -1,
     lines: 0,
     dead: false,
+    combo: -1,
+    b2bActive: false,
   };
 }
 
@@ -111,6 +115,8 @@ export function initVersusData(playerSnapshot?: Pick<import('./types').Snapshot,
       pieceIndex: -1,
       lines: 0,
       dead: false,
+      combo: -1,
+      b2bActive: false,
     };
   } else {
     bot = initBotBoard();
@@ -142,6 +148,8 @@ export function initBotVsBotData(): BotVsBotData {
     pieceIndex: startIndex,
     lines: 0,
     dead: false,
+    combo: -1,
+    b2bActive: false,
   });
 
   return {
@@ -172,7 +180,7 @@ function computeGarbage(
   }
   const qualifying = isTSpin || linesCleared === 4;
   if (qualifying && b2bActive) base++;
-  base += COMBO_TABLE[Math.min(comboIndex, COMBO_TABLE.length - 1)] ?? 5;
+  base += COMBO_TABLE[Math.min(comboIndex, COMBO_TABLE.length - 1)];
   return base;
 }
 
@@ -211,7 +219,7 @@ function handleLock(
 
 // ---- Player lock hook ----
 
-export function setupPlayerLockHook(playerState: GameState, data: VersusData): void {
+export function setupPlayerLockHook(data: VersusData): void {
   setLockHook((state, linesCleared, landedPiece, preLockBoard, wasRotation) => {
     const isTSpin =
       landedPiece.type === 'T' &&
@@ -226,34 +234,42 @@ export function setupPlayerLockHook(playerState: GameState, data: VersusData): v
     );
     // Check if post-garbage board triggers game over (board overflow)
     if (isGameOver(state.board)) state.mode = 'gameover';
-    void playerState; // captured in closure for future use
   });
 }
 
 // Send bot state to the AI worker for async move computation.
-export function requestBotMove(worker: Worker, bot: BotBoard, pendingGarbage: number): void {
+export function requestBotMove(
+  worker: Worker,
+  bot: BotBoard,
+  pendingGarbage: number,
+  aiParams?: { beamWidth: number; searchDepth: number; advancedEval?: boolean },
+): void {
   if (bot.pieceIndex >= 0) {
     // Extend shared sequence and pass a slice as bagState so the beam search
     // looks ahead into the same pieces both bots will actually receive.
     getBvbPiece(bot.pieceIndex + WORKER_LOOKAHEAD - 1);
     const bagState = bvbSeq.slice(bot.pieceIndex, bot.pieceIndex + WORKER_LOOKAHEAD);
-    worker.postMessage(structuredClone({ bot: { ...bot, bagState }, pendingGarbage }));
+    worker.postMessage({ bot: { ...bot, bagState }, pendingGarbage, ...aiParams });
   } else {
-    worker.postMessage(structuredClone({ bot, pendingGarbage }));
+    worker.postMessage({ bot, pendingGarbage, ...aiParams });
   }
 }
 
 // Apply a pre-computed move to the bot board. Garbage routing is handled
 // internally via handleLock (bot's outgoing goes to playerCombat.pendingGarbage).
+// Returns null if the move was valid, 'occupied' if the position collided with existing
+// cells, or 'floating' if the piece was not at the lowest valid resting row.
+// In either error case a hard-drop fallback is applied automatically.
 export function applyBotMove(
   move: { rotationIndex: number; x: number; y: number; useHold: boolean },
   bot: BotBoard,
   botCombat: CombatState,
   playerCombat: CombatState,
-): void {
-  if (bot.dead) return;
+): 'occupied' | 'floating' | null {
+  if (bot.dead) return null;
 
   const useBvb = bot.pieceIndex >= 0;
+  let invalidReason: 'occupied' | 'floating' | null = null;
 
   // Draw the next piece from the appropriate source and update bot state.
   function drawNext(): PieceType {
@@ -287,6 +303,11 @@ export function applyBotMove(
     y: move.y,
   };
   if (collides(bot.board, piece, 0, 0)) {
+    invalidReason = 'occupied';
+  } else if (!collides(bot.board, piece, 0, 1)) {
+    invalidReason = 'floating';
+  }
+  if (invalidReason) {
     piece.y = hardDropY(bot.board, { ...piece, y: 0 });
   }
 
@@ -301,6 +322,9 @@ export function applyBotMove(
 
   // Garbage exchange
   bot.board = handleLock(botCombat, playerCombat, bot.board, linesCleared, isTSpin);
+  // Mirror combat state onto bot so the AI worker sees up-to-date combo/b2b on its next request.
+  bot.combo = botCombat.combo;
+  bot.b2bActive = botCombat.b2bActive;
 
   // Spawn next piece
   if (!useBvb) botBag.restoreState(bot.bagState);
@@ -312,4 +336,6 @@ export function applyBotMove(
   if (isGameOver(bot.board) || collides(bot.board, bot.active, 0, 0)) {
     bot.dead = true;
   }
+
+  return invalidReason;
 }

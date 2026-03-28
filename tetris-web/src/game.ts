@@ -17,7 +17,7 @@ import { pushHistory, rewind } from './rewind';
 import { InputState, wasJustPressed, isHeld } from './input';
 import { enterEditor, exitEditor } from './editor';
 
-const NEXT_QUEUE_SIZE = 5;
+export const NEXT_QUEUE_SIZE = 5;
 
 // Hook called inside lockAndSpawn after line clears, before the next piece spawns.
 // Used by versus mode to calculate and exchange garbage.
@@ -257,7 +257,11 @@ export function processFrame(
       const escToMenu = wasJustPressed(input, 'Escape') && state.variant === 'creative';
       state.mode = escToMenu ? 'menu' : 'paused';
     }
-    else if (state.mode === 'paused') state.mode = wasJustPressed(input, 'Escape') ? 'menu' : 'playing';
+    else if (state.mode === 'paused') {
+      state.mode = wasJustPressed(input, 'Escape') ? 'menu' : 'playing';
+      // Reset DAS so a held direction key doesn't fire ARR immediately on the first active frame
+      if (state.mode === 'playing') { input.dasLeft = 0; input.dasRight = 0; }
+    }
     else if (state.mode === 'gameover') state.mode = 'menu';
     else if (state.mode === 'countdown') state.mode = 'menu';
     return;
@@ -276,6 +280,8 @@ export function processFrame(
       state.rafHandle = handle;
     } else {
       rewind(state);
+      input.dasLeft = 0;
+      input.dasRight = 0;
     }
     return;
   }
@@ -343,9 +349,10 @@ export function processFrame(
   // Last-key-wins: when both directions are held, only process the one pressed
   // more recently. dasLeft/dasRight start at 0 on key-down and accumulate each
   // frame, so the lower value belongs to the key pressed most recently.
+  // Strict < on both sides: ties (simultaneous press) cancel both directions.
   const bothHeld = movingLeft && movingRight;
-  const processLeft  = movingLeft  && (!bothHeld || input.dasLeft  <= input.dasRight);
-  const processRight = movingRight && (!bothHeld || input.dasRight <  input.dasLeft);
+  const processLeft  = movingLeft  && (!bothHeld || input.dasLeft  < input.dasRight);
+  const processRight = movingRight && (!bothHeld || input.dasRight < input.dasLeft);
 
   if (processLeft)
     input.dasLeft  = handleDasArr(state, wasJustPressed(input, kb.moveLeft),  input.dasLeft,  -1, dt, DAS_MS, ARR_MS);

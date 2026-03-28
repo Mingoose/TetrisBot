@@ -185,20 +185,25 @@
     <h2><span class="section-num">01</span> Quick Start</h2>
 
     <p>
-      The fastest way to get started is to copy <code>example-ai.js</code> from the repo root.
-      It already implements a working greedy one-piece lookahead AI.
+      The fastest way to get started is to download the example AI below — it already implements
+      a working greedy one-piece lookahead AI. Then upload it as-is to verify everything works,
+      and modify it from there.
+    </p>
+
+    <p>
+      <a href="/example-ai.js" download="example-ai.js" style="display:inline-block;background:#1a1a3a;border:1px solid #4444aa;color:#aaaaff;font-family:monospace;font-size:12px;padding:8px 18px;text-decoration:none;">&#8659; Download example-ai.js</a>
     </p>
 
     <ol style="padding-left:20px; font-size:13px; color:#9999bb; margin-bottom:14px;">
-      <li style="margin-bottom:6px;">Copy or download <code>example-ai.js</code>.</li>
-      <li style="margin-bottom:6px;">From the main menu, click <strong style="color:#aaaacc">VS AI</strong> or <strong style="color:#aaaacc">WATCH</strong>.</li>
-      <li style="margin-bottom:6px;">Click <strong style="color:#aaaacc">MANAGE AI</strong> (or the AI Manager button), then <strong style="color:#aaaacc">+ Upload .js AI file</strong>.</li>
-      <li style="margin-bottom:6px;">Select your file — it appears in the list immediately.</li>
-      <li>Select it and click <strong style="color:#aaaacc">Done</strong>, then start the game.</li>
+      <li style="margin-bottom:6px;">Download <code>example-ai.js</code> using the button above.</li>
+      <li style="margin-bottom:6px;">From the main menu, click <strong style="color:#aaaacc">AI MANAGER</strong>.</li>
+      <li style="margin-bottom:6px;">Click <strong style="color:#aaaacc">+ Upload .js AI file</strong> and select your file — it appears in the list immediately.</li>
+      <li style="margin-bottom:6px;">Select it and click <strong style="color:#aaaacc">Done</strong>.</li>
+      <li>Start a <strong style="color:#aaaacc">VERSUS</strong>, <strong style="color:#aaaacc">WATCH</strong>, or <strong style="color:#aaaacc">BOT VS BOT</strong> game — your AI will be used.</li>
     </ol>
 
     <div class="callout tip">
-      <p>Your AI is stored in <code>localStorage</code> and persists across sessions. You can upload multiple AIs and switch between them in the AI Manager.</p>
+      <p>Your AIs are saved to your account and persist across sessions and devices. You can upload multiple AIs and switch between them in the AI Manager.</p>
     </div>
 
     <!-- ── REQUIRED INTERFACE ─────────────────────────────────── -->
@@ -379,8 +384,145 @@
       </tbody>
     </table>
 
+    <!-- ── ROTATIONS & SRS ──────────────────────────────────── -->
+    <h2><span class="section-num">07</span> Rotation states &amp; SRS wall kicks</h2>
+
+    <h3>The four rotation states</h3>
+    <p>
+      Every piece has four rotation states numbered <code>0</code>–<code>3</code>, cycling clockwise:
+    </p>
+
+    <table>
+      <thead><tr><th>Index</th><th>Name</th><th>Reached by</th></tr></thead>
+      <tbody>
+        <tr><td>0</td><td>Spawn</td><td>Starting orientation when a piece enters the board</td></tr>
+        <tr><td>1</td><td>R (CW)</td><td>One clockwise rotation from spawn</td></tr>
+        <tr><td>2</td><td>2 (180°)</td><td>Two clockwise rotations from spawn</td></tr>
+        <tr><td>3</td><td>L (CCW)</td><td>Three clockwise rotations — same as one CCW from spawn</td></tr>
+      </tbody>
+    </table>
+
+    <p>
+      Your AI returns a <code>rotationIndex</code> (0–3) as the <em>target</em> state — the game
+      handles actually spinning the piece there. You don't need to simulate individual rotation steps
+      unless you're doing advanced move validation.
+    </p>
+
+    <h3>Bounding boxes</h3>
+    <p>
+      Each rotation is stored in a fixed-size 2D grid. The grid size varies by piece:
+    </p>
+    <table>
+      <thead><tr><th>Piece</th><th>Grid size</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td>I</td><td>4×4</td><td>Asymmetric — CW state occupies col 2, CCW occupies col 1</td></tr>
+        <tr><td>O</td><td>2×2</td><td>All four states are identical</td></tr>
+        <tr><td>T, S, Z, J, L</td><td>3×3</td><td>Standard bounding box</td></tr>
+      </tbody>
+    </table>
+    <p>
+      The <code>x</code> and <code>y</code> in <code>bot.active</code> and in your return value refer
+      to the <strong>top-left corner of the bounding box</strong>, not the visible cells. This means
+      x can be negative (e.g. an I piece hanging off the left edge stays in a valid column inside the
+      grid). Always use <code>collides()</code> to validate a position rather than checking bounds manually.
+    </p>
+
+    <h3>Full rotation matrices</h3>
+    <p>
+      The exact matrices used by the game — copy these into your AI as the <code>PIECES</code> constant.
+      Rows run top to bottom, columns left to right. <code>1</code> = filled cell.
+    </p>
+
+    <pre><span class="comment">// State order: 0 (spawn) → 1/R (CW) → 2 (180°) → 3/L (CCW)</span>
+<span class="kw">const</span> <span class="key">PIECES</span> = {
+  <span class="comment">// 4×4 bounding box</span>
+  <span class="key">I</span>: [
+    [[<span class="num">0</span>,<span class="num">0</span>,<span class="num">0</span>,<span class="num">0</span>],[<span class="num">1</span>,<span class="num">1</span>,<span class="num">1</span>,<span class="num">1</span>],[<span class="num">0</span>,<span class="num">0</span>,<span class="num">0</span>,<span class="num">0</span>],[<span class="num">0</span>,<span class="num">0</span>,<span class="num">0</span>,<span class="num">0</span>]], <span class="comment">// 0</span>
+    [[<span class="num">0</span>,<span class="num">0</span>,<span class="num">1</span>,<span class="num">0</span>],[<span class="num">0</span>,<span class="num">0</span>,<span class="num">1</span>,<span class="num">0</span>],[<span class="num">0</span>,<span class="num">0</span>,<span class="num">1</span>,<span class="num">0</span>],[<span class="num">0</span>,<span class="num">0</span>,<span class="num">1</span>,<span class="num">0</span>]], <span class="comment">// R</span>
+    [[<span class="num">0</span>,<span class="num">0</span>,<span class="num">0</span>,<span class="num">0</span>],[<span class="num">0</span>,<span class="num">0</span>,<span class="num">0</span>,<span class="num">0</span>],[<span class="num">1</span>,<span class="num">1</span>,<span class="num">1</span>,<span class="num">1</span>],[<span class="num">0</span>,<span class="num">0</span>,<span class="num">0</span>,<span class="num">0</span>]], <span class="comment">// 2</span>
+    [[<span class="num">0</span>,<span class="num">1</span>,<span class="num">0</span>,<span class="num">0</span>],[<span class="num">0</span>,<span class="num">1</span>,<span class="num">0</span>,<span class="num">0</span>],[<span class="num">0</span>,<span class="num">1</span>,<span class="num">0</span>,<span class="num">0</span>],[<span class="num">0</span>,<span class="num">1</span>,<span class="num">0</span>,<span class="num">0</span>]], <span class="comment">// L</span>
+  ],
+  <span class="comment">// 2×2 bounding box — all rotations identical</span>
+  <span class="key">O</span>: [[[<span class="num">1</span>,<span class="num">1</span>],[<span class="num">1</span>,<span class="num">1</span>]],[[<span class="num">1</span>,<span class="num">1</span>],[<span class="num">1</span>,<span class="num">1</span>]],[[<span class="num">1</span>,<span class="num">1</span>],[<span class="num">1</span>,<span class="num">1</span>]],[[<span class="num">1</span>,<span class="num">1</span>],[<span class="num">1</span>,<span class="num">1</span>]]],
+  <span class="comment">// 3×3 bounding box</span>
+  <span class="key">T</span>: [
+    [[<span class="num">0</span>,<span class="num">1</span>,<span class="num">0</span>],[<span class="num">1</span>,<span class="num">1</span>,<span class="num">1</span>],[<span class="num">0</span>,<span class="num">0</span>,<span class="num">0</span>]], <span class="comment">// 0  .X. / XXX / ...</span>
+    [[<span class="num">0</span>,<span class="num">1</span>,<span class="num">0</span>],[<span class="num">0</span>,<span class="num">1</span>,<span class="num">1</span>],[<span class="num">0</span>,<span class="num">1</span>,<span class="num">0</span>]], <span class="comment">// R  .X. / .XX / .X.</span>
+    [[<span class="num">0</span>,<span class="num">0</span>,<span class="num">0</span>],[<span class="num">1</span>,<span class="num">1</span>,<span class="num">1</span>],[<span class="num">0</span>,<span class="num">1</span>,<span class="num">0</span>]], <span class="comment">// 2  ... / XXX / .X.</span>
+    [[<span class="num">0</span>,<span class="num">1</span>,<span class="num">0</span>],[<span class="num">1</span>,<span class="num">1</span>,<span class="num">0</span>],[<span class="num">0</span>,<span class="num">1</span>,<span class="num">0</span>]], <span class="comment">// L  .X. / XX. / .X.</span>
+  ],
+  <span class="key">S</span>: [
+    [[<span class="num">0</span>,<span class="num">1</span>,<span class="num">1</span>],[<span class="num">1</span>,<span class="num">1</span>,<span class="num">0</span>],[<span class="num">0</span>,<span class="num">0</span>,<span class="num">0</span>]], <span class="comment">// 0</span>
+    [[<span class="num">0</span>,<span class="num">1</span>,<span class="num">0</span>],[<span class="num">0</span>,<span class="num">1</span>,<span class="num">1</span>],[<span class="num">0</span>,<span class="num">0</span>,<span class="num">1</span>]], <span class="comment">// R</span>
+    [[<span class="num">0</span>,<span class="num">0</span>,<span class="num">0</span>],[<span class="num">0</span>,<span class="num">1</span>,<span class="num">1</span>],[<span class="num">1</span>,<span class="num">1</span>,<span class="num">0</span>]], <span class="comment">// 2</span>
+    [[<span class="num">1</span>,<span class="num">0</span>,<span class="num">0</span>],[<span class="num">1</span>,<span class="num">1</span>,<span class="num">0</span>],[<span class="num">0</span>,<span class="num">1</span>,<span class="num">0</span>]], <span class="comment">// L</span>
+  ],
+  <span class="key">Z</span>: [
+    [[<span class="num">1</span>,<span class="num">1</span>,<span class="num">0</span>],[<span class="num">0</span>,<span class="num">1</span>,<span class="num">1</span>],[<span class="num">0</span>,<span class="num">0</span>,<span class="num">0</span>]], <span class="comment">// 0</span>
+    [[<span class="num">0</span>,<span class="num">0</span>,<span class="num">1</span>],[<span class="num">0</span>,<span class="num">1</span>,<span class="num">1</span>],[<span class="num">0</span>,<span class="num">1</span>,<span class="num">0</span>]], <span class="comment">// R</span>
+    [[<span class="num">0</span>,<span class="num">0</span>,<span class="num">0</span>],[<span class="num">1</span>,<span class="num">1</span>,<span class="num">0</span>],[<span class="num">0</span>,<span class="num">1</span>,<span class="num">1</span>]], <span class="comment">// 2</span>
+    [[<span class="num">0</span>,<span class="num">1</span>,<span class="num">0</span>],[<span class="num">1</span>,<span class="num">1</span>,<span class="num">0</span>],[<span class="num">1</span>,<span class="num">0</span>,<span class="num">0</span>]], <span class="comment">// L</span>
+  ],
+  <span class="key">J</span>: [
+    [[<span class="num">1</span>,<span class="num">0</span>,<span class="num">0</span>],[<span class="num">1</span>,<span class="num">1</span>,<span class="num">1</span>],[<span class="num">0</span>,<span class="num">0</span>,<span class="num">0</span>]], <span class="comment">// 0  X.. / XXX / ...</span>
+    [[<span class="num">0</span>,<span class="num">1</span>,<span class="num">1</span>],[<span class="num">0</span>,<span class="num">1</span>,<span class="num">0</span>],[<span class="num">0</span>,<span class="num">1</span>,<span class="num">0</span>]], <span class="comment">// R  .XX / .X. / .X.</span>
+    [[<span class="num">0</span>,<span class="num">0</span>,<span class="num">0</span>],[<span class="num">1</span>,<span class="num">1</span>,<span class="num">1</span>],[<span class="num">0</span>,<span class="num">0</span>,<span class="num">1</span>]], <span class="comment">// 2  ... / XXX / ..X</span>
+    [[<span class="num">0</span>,<span class="num">1</span>,<span class="num">0</span>],[<span class="num">0</span>,<span class="num">1</span>,<span class="num">0</span>],[<span class="num">1</span>,<span class="num">1</span>,<span class="num">0</span>]], <span class="comment">// L  .X. / .X. / XX.</span>
+  ],
+  <span class="key">L</span>: [
+    [[<span class="num">0</span>,<span class="num">0</span>,<span class="num">1</span>],[<span class="num">1</span>,<span class="num">1</span>,<span class="num">1</span>],[<span class="num">0</span>,<span class="num">0</span>,<span class="num">0</span>]], <span class="comment">// 0  ..X / XXX / ...</span>
+    [[<span class="num">0</span>,<span class="num">1</span>,<span class="num">0</span>],[<span class="num">0</span>,<span class="num">1</span>,<span class="num">0</span>],[<span class="num">0</span>,<span class="num">1</span>,<span class="num">1</span>]], <span class="comment">// R  .X. / .X. / .XX</span>
+    [[<span class="num">0</span>,<span class="num">0</span>,<span class="num">0</span>],[<span class="num">1</span>,<span class="num">1</span>,<span class="num">1</span>],[<span class="num">1</span>,<span class="num">0</span>,<span class="num">0</span>]], <span class="comment">// 2  ... / XXX / X..</span>
+    [[<span class="num">1</span>,<span class="num">1</span>,<span class="num">0</span>],[<span class="num">0</span>,<span class="num">1</span>,<span class="num">0</span>],[<span class="num">0</span>,<span class="num">1</span>,<span class="num">0</span>]], <span class="comment">// L  XX. / .X. / .X.</span>
+  ],
+};</pre>
+
+    <h3>SRS wall kicks</h3>
+    <p>
+      When the game executes a rotation, it first tries placing the piece with no offset. If that
+      position collides, it tries up to four alternative offsets — called <strong>wall kicks</strong>
+      — in order. The first offset that doesn't collide is used; if all five fail (including the
+      no-offset attempt), the rotation is rejected.
+    </p>
+    <p>
+      <strong>For your AI this usually doesn't matter</strong> — you return a target
+      <code>{rotationIndex, x, y}</code> and the game places the piece directly there. However,
+      if you're generating candidate moves by iterating columns and want to know whether a particular
+      rotation at a given x is reachable, you need to understand that some positions are only
+      reachable via a kick (spinning into a gap), not by sliding in from the side.
+    </p>
+
+    <h3>Wall kick tables</h3>
+    <p>
+      Each entry is <code>[dx, dy]</code>. <code>dx</code> positive = right; <code>dy</code> positive = <strong>down</strong>
+      (board Y increases downward). The game uses two separate tables:
+    </p>
+
+    <p><strong>J, L, S, T, Z</strong> — 5 kick offsets per transition:</p>
+    <pre><span class="comment">// [dx, dy] — dy positive = down</span>
+<span class="kw">const</span> <span class="key">WALL_KICKS_JLSTZ</span> = [
+  <span class="comment">// 0 → R</span>  [[ <span class="num">0</span>, <span class="num">0</span>], [<span class="num">-1</span>, <span class="num">0</span>], [<span class="num">-1</span>,<span class="num">-1</span>], [ <span class="num">0</span>, <span class="num">2</span>], [<span class="num">-1</span>, <span class="num">2</span>]],
+  <span class="comment">// R → 2</span>  [[ <span class="num">0</span>, <span class="num">0</span>], [ <span class="num">1</span>, <span class="num">0</span>], [ <span class="num">1</span>, <span class="num">1</span>], [ <span class="num">0</span>,<span class="num">-2</span>], [ <span class="num">1</span>,<span class="num">-2</span>]],
+  <span class="comment">// 2 → L</span>  [[ <span class="num">0</span>, <span class="num">0</span>], [ <span class="num">1</span>, <span class="num">0</span>], [ <span class="num">1</span>,<span class="num">-1</span>], [ <span class="num">0</span>, <span class="num">2</span>], [ <span class="num">1</span>, <span class="num">2</span>]],
+  <span class="comment">// L → 0</span>  [[ <span class="num">0</span>, <span class="num">0</span>], [<span class="num">-1</span>, <span class="num">0</span>], [<span class="num">-1</span>, <span class="num">1</span>], [ <span class="num">0</span>,<span class="num">-2</span>], [<span class="num">-1</span>,<span class="num">-2</span>]],
+];</pre>
+
+    <p><strong>I piece</strong> — different offsets due to its 4×4 bounding box:</p>
+    <pre><span class="kw">const</span> <span class="key">WALL_KICKS_I</span> = [
+  <span class="comment">// 0 → R</span>  [[ <span class="num">0</span>, <span class="num">0</span>], [<span class="num">-2</span>, <span class="num">0</span>], [ <span class="num">1</span>, <span class="num">0</span>], [<span class="num">-2</span>,<span class="num">-1</span>], [ <span class="num">1</span>, <span class="num">2</span>]],
+  <span class="comment">// R → 2</span>  [[ <span class="num">0</span>, <span class="num">0</span>], [<span class="num">-1</span>, <span class="num">0</span>], [ <span class="num">2</span>, <span class="num">0</span>], [<span class="num">-1</span>, <span class="num">2</span>], [ <span class="num">2</span>,<span class="num">-1</span>]],
+  <span class="comment">// 2 → L</span>  [[ <span class="num">0</span>, <span class="num">0</span>], [ <span class="num">2</span>, <span class="num">0</span>], [<span class="num">-1</span>, <span class="num">0</span>], [ <span class="num">2</span>, <span class="num">1</span>], [<span class="num">-1</span>,<span class="num">-2</span>]],
+  <span class="comment">// L → 0</span>  [[ <span class="num">0</span>, <span class="num">0</span>], [ <span class="num">1</span>, <span class="num">0</span>], [<span class="num">-2</span>, <span class="num">0</span>], [ <span class="num">1</span>,<span class="num">-2</span>], [<span class="num">-2</span>, <span class="num">1</span>]],
+];</pre>
+
+    <div class="callout">
+      <p>CCW rotation steps backwards through the table: rotating from state 1 (R) CCW means
+      using the <code>0 → R</code> kicks but applied in reverse (subtract the offset instead of
+      adding). The O piece has no kick table — it never rotates in practice since all states are identical.</p>
+    </div>
+
     <!-- ── HELPER FUNCTIONS ──────────────────────────────────── -->
-    <h2><span class="section-num">07</span> Helper functions you'll need</h2>
+    <h2><span class="section-num">08</span> Helper functions you'll need</h2>
 
     <p>
       Because your file runs in isolation you must include your own board-manipulation utilities.
@@ -389,8 +531,7 @@
 
     <h3>Piece rotation matrices</h3>
     <p>
-      Each piece has 4 rotation states. Copy the <code>PIECES</code> constant from the example —
-      it's a map of piece type → array of four 2D rotation grids.
+      Copy the <code>PIECES</code> constant from section 07 above (or from <code>example-ai.js</code>).
     </p>
 
     <h3><code>collides(board, rotation, x, y)</code></h3>
@@ -440,7 +581,7 @@
 }</pre>
 
     <!-- ── EVALUATION ─────────────────────────────────────────── -->
-    <h2><span class="section-num">08</span> Writing an evaluation function</h2>
+    <h2><span class="section-num">09</span> Writing an evaluation function</h2>
 
     <p>
       Your evaluation function scores a board state — <strong>higher = better</strong>.
@@ -489,9 +630,9 @@
     </p>
 
     <!-- ── EXAMPLE WALKTHROUGH ───────────────────────────────── -->
-    <h2><span class="section-num">09</span> Annotated example: <code>example-ai.js</code></h2>
+    <h2><span class="section-num">10</span> Annotated example walkthrough</h2>
 
-    <p>The full source with inline annotations:</p>
+    <p>How the example AI fits together:</p>
 
     <pre><span class="comment">// ── 1. Piece rotation matrices ──────────────────────────────────
 // Required: the game doesn't provide these to you, so include them.</span>
@@ -548,8 +689,142 @@
   <span class="kw">return</span> { rotationIndex: <span class="num">0</span>, x: bot.active.x, y: bot.active.y, useHold: <span class="kw">false</span> };
 }</pre>
 
+    <!-- ── FULL SOURCE ──────────────────────────────────────────── -->
+    <h2><span class="section-num">11</span> Full source: <code>example-ai.js</code></h2>
+
+    <p>You can also copy the full source directly from here and save it as a <code>.js</code> file:</p>
+
+    <div style="position:relative;">
+      <button id="copy-btn" onclick="
+        navigator.clipboard.writeText(document.getElementById('example-src').textContent);
+        this.textContent = 'Copied!';
+        setTimeout(() => this.textContent = 'Copy', 2000);
+      " style="position:absolute;top:10px;right:10px;background:#1a1a3a;border:1px solid #4444aa;color:#aaaaff;font-family:monospace;font-size:11px;padding:4px 12px;cursor:pointer;">Copy</button>
+      <pre id="example-src" style="padding-top:38px;">// Example custom AI for Tetris upload feature.
+// Implements a simple greedy one-piece lookahead.
+//
+// Interface: function getBestMove(bot, pendingGarbage) => { rotationIndex, x, y, useHold }
+
+const PIECES = {
+  I: [
+    [[0,0,0,0],[1,1,1,1],[0,0,0,0],[0,0,0,0]],
+    [[0,0,1,0],[0,0,1,0],[0,0,1,0],[0,0,1,0]],
+    [[0,0,0,0],[0,0,0,0],[1,1,1,1],[0,0,0,0]],
+    [[0,1,0,0],[0,1,0,0],[0,1,0,0],[0,1,0,0]],
+  ],
+  O: [[[1,1],[1,1]],[[1,1],[1,1]],[[1,1],[1,1]],[[1,1],[1,1]]],
+  T: [
+    [[0,1,0],[1,1,1],[0,0,0]],
+    [[0,1,0],[0,1,1],[0,1,0]],
+    [[0,0,0],[1,1,1],[0,1,0]],
+    [[0,1,0],[1,1,0],[0,1,0]],
+  ],
+  S: [
+    [[0,1,1],[1,1,0],[0,0,0]],
+    [[0,1,0],[0,1,1],[0,0,1]],
+    [[0,0,0],[0,1,1],[1,1,0]],
+    [[1,0,0],[1,1,0],[0,1,0]],
+  ],
+  Z: [
+    [[1,1,0],[0,1,1],[0,0,0]],
+    [[0,0,1],[0,1,1],[0,1,0]],
+    [[0,0,0],[1,1,0],[0,1,1]],
+    [[0,1,0],[1,1,0],[1,0,0]],
+  ],
+  J: [
+    [[1,0,0],[1,1,1],[0,0,0]],
+    [[0,1,1],[0,1,0],[0,1,0]],
+    [[0,0,0],[1,1,1],[0,0,1]],
+    [[0,1,0],[0,1,0],[1,1,0]],
+  ],
+  L: [
+    [[0,0,1],[1,1,1],[0,0,0]],
+    [[0,1,0],[0,1,0],[0,1,1]],
+    [[0,0,0],[1,1,1],[1,0,0]],
+    [[1,1,0],[0,1,0],[0,1,0]],
+  ],
+};
+
+const BOARD_ROWS = 20;
+const BOARD_COLS = 10;
+
+function collides(board, rotation, x, y) {
+  for (let r = 0; r &lt; rotation.length; r++)
+    for (let c = 0; c &lt; rotation[r].length; c++) {
+      if (!rotation[r][c]) continue;
+      const row = y + r, col = x + c;
+      if (col &lt; 0 || col &gt;= BOARD_COLS || row &gt;= BOARD_ROWS) return true;
+      if (row &gt;= 0 &amp;&amp; board[row][col] !== 0) return true;
+    }
+  return false;
+}
+
+function hardDropY(board, rotation, x) {
+  let y = 0;
+  while (!collides(board, rotation, x, y + 1)) y++;
+  return y;
+}
+
+function lockAndClear(board, rotation, x, y) {
+  const b = board.map(row => [...row]);
+  for (let r = 0; r &lt; rotation.length; r++)
+    for (let c = 0; c &lt; rotation[r].length; c++)
+      if (rotation[r][c] &amp;&amp; y + r &gt;= 0) b[y + r][x + c] = 1;
+  const kept = b.filter(row => row.some(v => v === 0));
+  const cleared = BOARD_ROWS - kept.length;
+  const empty = Array.from({ length: cleared }, () => new Array(BOARD_COLS).fill(0));
+  return { board: [...empty, ...kept], linesCleared: cleared };
+}
+
+function evaluate(board, linesCleared) {
+  const heights = new Array(BOARD_COLS).fill(0);
+  let holes = 0;
+  for (let c = 0; c &lt; BOARD_COLS; c++) {
+    let found = false;
+    for (let r = 0; r &lt; BOARD_ROWS; r++) {
+      if (board[r][c]) { if (!found) { heights[c] = BOARD_ROWS - r; found = true; } }
+      else if (found) holes++;
+    }
+  }
+  const aggHeight = heights.reduce((a, b) => a + b, 0);
+  let bumpiness = 0;
+  for (let c = 0; c &lt; BOARD_COLS - 1; c++) bumpiness += Math.abs(heights[c] - heights[c+1]);
+  const lineClearScore = [0, -0.5, 1.0, 2.5, 5.0][Math.min(linesCleared, 4)];
+  return -0.5 * aggHeight + lineClearScore - 0.8 * holes - 0.3 * bumpiness;
+}
+
+function bestPlacementFor(board, pieceType) {
+  let best = null, bestScore = -Infinity;
+  for (let rot = 0; rot &lt; 4; rot++) {
+    const rotation = PIECES[pieceType][rot % 4];
+    for (let x = 0; x &lt;= BOARD_COLS - rotation[0].length; x++) {
+      if (collides(board, rotation, x, 0)) continue;
+      const y = hardDropY(board, rotation, x);
+      const { board: result, linesCleared } = lockAndClear(board, rotation, x, y);
+      const score = evaluate(result, linesCleared);
+      if (score > bestScore) { bestScore = score; best = { rotationIndex: rot, x, y, score }; }
+    }
+  }
+  return best;
+}
+
+function getBestMove(bot, pendingGarbage) {
+  const active = bestPlacementFor(bot.board, bot.active.type);
+
+  if (!bot.holdUsed) {
+    const holdType = bot.hold ?? bot.nextQueue[0];
+    const fromHold = bestPlacementFor(bot.board, holdType);
+    if (fromHold &amp;&amp; active &amp;&amp; fromHold.score > active.score + 0.5)
+      return { rotationIndex: fromHold.rotationIndex, x: fromHold.x, y: fromHold.y, useHold: true };
+  }
+
+  if (active) return { rotationIndex: active.rotationIndex, x: active.x, y: active.y, useHold: false };
+  return { rotationIndex: 0, x: bot.active.x, y: bot.active.y, useHold: false };
+}</pre>
+    </div>
+
     <!-- ── TIPS ───────────────────────────────────────────────── -->
-    <h2><span class="section-num">10</span> Tips for stronger play</h2>
+    <h2><span class="section-num">12</span> Tips for stronger play</h2>
 
     <ul>
       <li>Start with the example, verify it uploads and plays, then tune weights in <code>evaluate()</code>.</li>

@@ -66,6 +66,52 @@ export function clearLines(board: CellValue[][]): { board: CellValue[][]; linesC
   return { board: [...newRows, ...remaining], linesCleared };
 }
 
+// Combined lock + clear optimised for the AI beam search.
+// Only deep-copies the 2–4 rows the piece touches instead of all 20,
+// and only checks those rows for full-line detection.
+export function lockAndClear(
+  board: CellValue[][],
+  active: ActivePiece,
+): { board: CellValue[][]; linesCleared: number } {
+  const rotation = getRotation(active.type, active.rotationIndex);
+
+  // Shallow-copy the outer array; deep-copy only rows the piece writes to.
+  const newBoard: CellValue[][] = board.slice();
+  for (let pr = 0; pr < rotation.length; pr++) {
+    const row = active.y + pr;
+    if (row < 0 || row >= BOARD_ROWS) continue;
+    if (!rotation[pr].some(c => c !== 0)) continue;
+    newBoard[row] = board[row].slice();
+    for (let pc = 0; pc < rotation[pr].length; pc++) {
+      if (!rotation[pr][pc]) continue;
+      const col = active.x + pc;
+      if (col >= 0 && col < BOARD_COLS) newBoard[row][col] = active.type as PieceType;
+    }
+  }
+
+  // Find full lines (only touched rows can become full).
+  let fullMask = 0; // bitmask of rows 0–19 that are full (up to 4 can be set)
+  let linesCleared = 0;
+  for (let pr = 0; pr < rotation.length; pr++) {
+    const row = active.y + pr;
+    if (row < 0 || row >= BOARD_ROWS) continue;
+    let full = true;
+    for (let c = 0; c < BOARD_COLS; c++) { if (newBoard[row][c] === 0) { full = false; break; } }
+    if (full) { fullMask |= (1 << row); linesCleared++; }
+  }
+
+  if (linesCleared === 0) return { board: newBoard, linesCleared: 0 };
+
+  // Rebuild board: linesCleared empty rows on top, then surviving rows in order.
+  const result: CellValue[][] = new Array(BOARD_ROWS);
+  for (let i = 0; i < linesCleared; i++) result[i] = new Array<CellValue>(BOARD_COLS).fill(0);
+  let wi = linesCleared;
+  for (let r = 0; r < BOARD_ROWS; r++) {
+    if (!(fullMask & (1 << r))) result[wi++] = newBoard[r];
+  }
+  return { board: result, linesCleared };
+}
+
 // Game over if any cell in the top two rows is filled after a lock.
 export function isGameOver(board: CellValue[][]): boolean {
   return board[0].some(c => c !== 0) || board[1].some(c => c !== 0);

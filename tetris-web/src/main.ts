@@ -4,7 +4,9 @@ import { setupEditor } from './editor';
 import {
   draw, CANVAS_H, VERSUS_CANVAS_W,
   MENU_SPRINT_BTN, MENU_CREATIVE_BTN, MENU_VERSUS_BTN, MENU_WATCH_BTN, MENU_BVB_BTN, MENU_UPLOAD_BTN,
+  MENU_DIFF_EASY_BTN, MENU_DIFF_MEDIUM_BTN, MENU_DIFF_HARD_BTN,
 } from './renderer';
+import { AiDifficulty, AI_DIFFICULTY_PARAMS } from './ai';
 import { loadSettings } from './storage';
 import { supabase } from './supabase';
 import { setupAuthUI } from './authUI';
@@ -33,7 +35,7 @@ setupEditor(canvas, state);
 interface SavedAI { id: string; name: string; code: string; }
 
 let savedAIs: SavedAI[] = [];
-let selectedAiIndex = -1; // -1 = built-in
+let selectedAiIndex = -2; // negative = built-in: -3=easy, -2=medium, -1=hard
 
 async function loadSavedAIs(): Promise<void> {
   const { data: { user } } = await supabase.auth.getUser();
@@ -68,8 +70,15 @@ async function deleteAI(index: number): Promise<void> {
   if (!ai) return;
   await supabase.from('user_ais').delete().eq('id', ai.id);
   savedAIs.splice(index, 1);
-  if (selectedAiIndex === index) selectedAiIndex = -1;
+  if (selectedAiIndex === index) selectedAiIndex = -2;
   else if (selectedAiIndex > index) selectedAiIndex--;
+}
+
+function builtinDifficultyOf(index: number): AiDifficulty | null {
+  if (index === -3) return 'easy';
+  if (index === -2) return 'medium';
+  if (index === -1) return 'hard';
+  return null;
 }
 
 // ---- Worker state ----
@@ -80,11 +89,18 @@ let customAiWorker: Worker | null = null;
 let customAiName: string | null = null;
 let customAiBlobUrl: string | null = null;
 let botMoveTimeout: ReturnType<typeof setTimeout> | null = null;
+let customAiError: string | null = null;
+let customAiWarning: string | null = null;
+let versusDifficulty: AiDifficulty = 'medium';
+let versusDifficultyPending = false;
+let bvbDifficulty: AiDifficulty = 'medium';
+let bvbDifficultyPending = false;
 
 // ---- Bot vs Bot state ----
 let botVsBotData: BotVsBotData | null = null;
 let bvbWorker1: Worker | null = null;
 let bvbWorker2: Worker | null = null;
+let bvbBot1Timeout: ReturnType<typeof setTimeout> | null = null;
 
 function getAiWorker(): Worker {
   if (customAiWorker) return customAiWorker;
@@ -105,31 +121,53 @@ function isValidMove(m: unknown): m is { rotationIndex: number; x: number; y: nu
 function wireWorker(w: Worker): void {
   w.onmessage = (e) => {
     if (e.data?.error) {
-      // Worker reported an error — let the timeout handle fallback, don't stall.
       console.warn('AI worker error:', e.data.error);
+      if (customAiWorker) customAiError = `Runtime error: ${e.data.error}`;
       return;
     }
     if (botMoveTimeout) { clearTimeout(botMoveTimeout); botMoveTimeout = null; }
-    if (versusData && isValidMove(e.data)) {
-      versusData.pendingMove = e.data;
+    if (versusData) {
+      if (isValidMove(e.data)) {
+        versusData.pendingMove = e.data;
+      } else if (customAiWorker) {
+        customAiError = 'getBestMove returned an invalid move object (expected { rotationIndex, x, y, useHold })';
+      }
     }
   };
 }
 
 function requestMoveWithTimeout(bot: BotBoard, pendingGarbage: number): void {
   const w = getAiWorker();
-  requestBotMove(w, bot, pendingGarbage);
+  let aiParams: typeof AI_DIFFICULTY_PARAMS[AiDifficulty] | undefined;
+  if (!customAiWorker) {
+    const builtinDiff = builtinDifficultyOf(selectedAiIndex);
+    aiParams = state.variant === 'versus'
+      ? AI_DIFFICULTY_PARAMS[versusDifficulty]
+      : AI_DIFFICULTY_PARAMS[builtinDiff ?? 'medium'];
+  }
+  requestBotMove(w, bot, pendingGarbage, aiParams);
   if (botMoveTimeout) clearTimeout(botMoveTimeout);
   botMoveTimeout = setTimeout(() => {
     botMoveTimeout = null;
-    if (customAiWorker) {
+    if (state.variant === 'watch' && customAiWorker) {
+      // Watch mode: terminate the game and show an error.
+      customAiError = 'AI exceeded the 2 s time limit — game terminated';
+      customAiWarning = null;
       customAiWorker.terminate();
       customAiWorker = null;
       customAiName = null;
+      if (versusData) versusData.bot.dead = true;
+    } else {
+      // Versus mode: fall back to built-in AI silently.
+      if (customAiWorker) {
+        customAiWorker.terminate();
+        customAiWorker = null;
+        customAiName = null;
+      }
+      const fallback = getAiWorker();
+      wireWorker(fallback);
+      requestBotMove(fallback, bot, pendingGarbage);
     }
-    const fallback = getAiWorker();
-    wireWorker(fallback);
-    requestBotMove(fallback, bot, pendingGarbage);
   }, 2000);
 }
 
@@ -170,17 +208,37 @@ function restartState(variant: GameVariant): void {
 }
 
 function stopBvbWorkers(): void {
+  if (bvbBot1Timeout) { clearTimeout(bvbBot1Timeout); bvbBot1Timeout = null; }
   bvbWorker1?.terminate(); bvbWorker1 = null;
   bvbWorker2?.terminate(); bvbWorker2 = null;
   botVsBotData = null;
 }
 
+function requestBvbBot1Move(bot: BotBoard, pendingGarbage: number): void {
+  if (!bvbWorker1) return;
+  // Custom AI workers ignore difficulty params; built-in bot1 uses the AI manager selection.
+  const builtinDiff = builtinDifficultyOf(selectedAiIndex);
+  requestBotMove(bvbWorker1, bot, pendingGarbage, customAiName ? undefined : AI_DIFFICULTY_PARAMS[builtinDiff ?? 'medium']);
+  if (bvbBot1Timeout) clearTimeout(bvbBot1Timeout);
+  if (customAiName) {
+    bvbBot1Timeout = setTimeout(() => {
+      bvbBot1Timeout = null;
+      customAiError = 'AI exceeded the 2 s time limit — game terminated';
+      customAiWarning = null;
+      if (botVsBotData) botVsBotData.bot1.dead = true;
+    }, 2000);
+  }
+}
+
 function startBotVsBot(): void {
   stopBvbWorkers(); // ensure any prior workers are cleaned up before creating new ones
+  customAiError = null;
+  customAiWarning = null;
   botVsBotData = initBotVsBotData();
 
   // Bot 1: use selected custom AI if any, otherwise a fresh built-in worker
   setupAiForGame();
+  const bvbBot1IsCustom = !!customAiWorker;
   if (customAiWorker) {
     bvbWorker1 = customAiWorker;
     customAiWorker = null; // bvbWorker1 now owns it
@@ -195,14 +253,26 @@ function startBotVsBot(): void {
   bvbWorker2.onerror = (e) => console.error('BvB worker 2 error:', e.message);
 
   bvbWorker1.onmessage = (e) => {
-    if (botVsBotData && isValidMove(e.data)) botVsBotData.pendingMove1 = e.data;
+    if (bvbBot1Timeout) { clearTimeout(bvbBot1Timeout); bvbBot1Timeout = null; }
+    if (e.data?.error) {
+      console.warn('BvB worker 1 error:', e.data.error);
+      if (bvbBot1IsCustom) customAiError = `Runtime error: ${e.data.error}`;
+      return;
+    }
+    if (botVsBotData) {
+      if (isValidMove(e.data)) {
+        botVsBotData.pendingMove1 = e.data;
+      } else if (bvbBot1IsCustom) {
+        customAiError = 'getBestMove returned an invalid move object (expected { rotationIndex, x, y, useHold })';
+      }
+    }
   };
   bvbWorker2.onmessage = (e) => {
     if (botVsBotData && isValidMove(e.data)) botVsBotData.pendingMove2 = e.data;
   };
 
-  requestBotMove(bvbWorker1, botVsBotData.bot1, 0);
-  requestBotMove(bvbWorker2, botVsBotData.bot2, 0);
+  requestBvbBot1Move(botVsBotData.bot1, 0);
+  requestBotMove(bvbWorker2, botVsBotData.bot2, 0, AI_DIFFICULTY_PARAMS[bvbDifficulty]);
 }
 
 // ---- AI manager overlay ----
@@ -211,8 +281,10 @@ function renderAiList(): void {
   const list = document.getElementById('ai-list')!;
   list.innerHTML = '';
 
-  // Built-in row
-  list.appendChild(makeAiRow(-1, 'Built-in (Beam Search)', 'DEFAULT', false));
+  // Built-in rows
+  list.appendChild(makeAiRow(-3, 'Easy',   'BUILT-IN', false));
+  list.appendChild(makeAiRow(-2, 'Medium', 'BUILT-IN', false));
+  list.appendChild(makeAiRow(-1, 'Hard',   'BUILT-IN', false));
 
   // Saved AI rows
   savedAIs.forEach((ai, i) => {
@@ -285,15 +357,29 @@ document.getElementById('ai-upload')!.addEventListener('change', (e) => {
     selectedAiIndex = existingIdx >= 0 ? existingIdx : savedAIs.length - 1;
     renderAiList();
   };
+  reader.onerror = () => {
+    console.error('Failed to read AI file:', file.name);
+  };
   reader.readAsText(file);
   (e.target as HTMLInputElement).value = '';
 });
 
 document.getElementById('ai-done-btn')!.addEventListener('click', closeAiManager);
 
+// Close manager when clicking the backdrop (outside the panel)
+document.getElementById('ai-manager')!.addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) closeAiManager();
+});
+
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && document.getElementById('ai-manager')!.style.display !== 'none') {
     closeAiManager();
+  }
+  if (e.key === 'Escape' && versusDifficultyPending) {
+    versusDifficultyPending = false;
+  }
+  if (e.key === 'Escape' && bvbDifficultyPending) {
+    bvbDifficultyPending = false;
   }
 });
 
@@ -307,12 +393,46 @@ canvas.addEventListener('click', (e) => {
   const hit = (b: typeof MENU_SPRINT_BTN) =>
     mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h;
 
-  if (hit(MENU_UPLOAD_BTN)) {
+  if (hit(MENU_UPLOAD_BTN) && isAdmin) {
     openAiManager();
     return;
   }
 
-  if (hit(MENU_BVB_BTN)) {
+  if (hit(MENU_BVB_BTN) && isAdmin) {
+    bvbDifficultyPending = true;
+    return;
+  }
+
+  // Difficulty selection screen (shared by versus and bot-vs-bot)
+  if (versusDifficultyPending) {
+    let chosen: AiDifficulty | null = null;
+    if (hit(MENU_DIFF_EASY_BTN))   chosen = 'easy';
+    if (hit(MENU_DIFF_MEDIUM_BTN)) chosen = 'medium';
+    if (hit(MENU_DIFF_HARD_BTN))   chosen = 'hard';
+    if (!chosen) return;
+    versusDifficulty = chosen;
+    versusDifficultyPending = false;
+    customAiError = null;
+    customAiWarning = null;
+    restartState('versus');
+    versusData = initVersusData(state);
+    setupPlayerLockHook(versusData);
+    setupAiForGame();
+    wireWorker(getAiWorker());
+    requestMoveWithTimeout(versusData.bot, 0);
+    return;
+  }
+
+  if (bvbDifficultyPending) {
+    let chosen: AiDifficulty | null = null;
+    if (hit(MENU_DIFF_EASY_BTN))   chosen = 'easy';
+    if (hit(MENU_DIFF_MEDIUM_BTN)) chosen = 'medium';
+    if (hit(MENU_DIFF_HARD_BTN))   chosen = 'hard';
+    if (!chosen) return;
+    bvbDifficulty = chosen;
+    bvbDifficultyPending = false;
+    customAiError = null;
+    customAiWarning = null;
     restartState('botvsbot');
     startBotVsBot();
     return;
@@ -321,16 +441,17 @@ canvas.addEventListener('click', (e) => {
   let variant: GameVariant | null = null;
   if (hit(MENU_SPRINT_BTN))   variant = 'sprint';
   if (hit(MENU_CREATIVE_BTN)) variant = 'creative';
-  if (hit(MENU_VERSUS_BTN))   variant = 'versus';
-  if (hit(MENU_WATCH_BTN))    variant = 'watch';
+  if (hit(MENU_VERSUS_BTN))   { versusDifficultyPending = true; return; }
+  if (hit(MENU_WATCH_BTN) && isAdmin) variant = 'watch';
   if (!variant) return;
 
   restartState(variant);
 
-  if (variant === 'versus' || variant === 'watch') {
-    versusData = initVersusData(variant === 'versus' ? state : undefined);
-    if (variant === 'versus') setupPlayerLockHook(state, versusData);
-    else setLockHook(null); // no garbage from player in watch mode
+  if (variant === 'watch') {
+    customAiError = null;
+    customAiWarning = null;
+    versusData = initVersusData();
+    setLockHook(null);
     setupAiForGame();
     wireWorker(getAiWorker());
     requestMoveWithTimeout(versusData.bot, 0);
@@ -341,11 +462,16 @@ canvas.addEventListener('click', (e) => {
 });
 
 let settings: Settings;
+let isAdmin = false;
 let prevTimestamp = 0;
 
-function startGame(userId: string): void {
-  loadSettings(userId).then((loaded) => {
-    settings = loaded;
+async function startGame(userId: string): Promise<void> {
+  const [loaded, profileResult] = await Promise.all([
+    loadSettings(userId),
+    supabase.from('profiles').select('is_admin').eq('user_id', userId).single(),
+  ]);
+  settings = loaded;
+  isAdmin = profileResult.data?.is_admin ?? false;
 
     setupSettingsUI(
       state,
@@ -353,6 +479,29 @@ function startGame(userId: string): void {
       (updated) => { settings = updated; },
       userId,
     );
+
+    const signOutBtn = document.createElement('button');
+    signOutBtn.textContent = 'Sign Out';
+    Object.assign(signOutBtn.style, {
+      position: 'fixed',
+      bottom: '18px',
+      right: '18px',
+      background: '#1e1e3a',
+      color: '#888899',
+      border: '1px solid #3a3a6a',
+      padding: '7px 18px',
+      fontSize: '13px',
+      fontFamily: 'monospace',
+      cursor: 'pointer',
+      zIndex: '10',
+    });
+    signOutBtn.addEventListener('mouseover', () => { signOutBtn.style.background = '#2a2a4a'; });
+    signOutBtn.addEventListener('mouseout',  () => { signOutBtn.style.background = '#1e1e3a'; });
+    signOutBtn.addEventListener('click', async () => {
+      await supabase.auth.signOut();
+      window.location.reload();
+    });
+    document.body.appendChild(signOutBtn);
 
     function gameLoop(timestamp: number): void {
     const dt = prevTimestamp === 0 ? 0 : Math.min(timestamp - prevTimestamp, 100);
@@ -377,6 +526,8 @@ function startGame(userId: string): void {
         state.mode = 'menu';
       } else if (wasJustPressed(input, settings.keybindings.rewind)) {
         if (state.variant === 'watch' && versusData) {
+          customAiError = null;
+          customAiWarning = null;
           versusData = initVersusData();
           setupAiForGame();
           wireWorker(getAiWorker());
@@ -398,7 +549,7 @@ function startGame(userId: string): void {
         // Restart detected: reinit bot and re-register hook
         if (wasLastFrameTime !== 0 && state.lastFrameTime === 0) {
           versusData = initVersusData(state);
-          setupPlayerLockHook(state, versusData);
+          setupPlayerLockHook(versusData);
           setupAiForGame();
           wireWorker(getAiWorker());
           requestMoveWithTimeout(versusData.bot, 0);
@@ -406,12 +557,17 @@ function startGame(userId: string): void {
 
         // Determine winner
         if (versusData.winner === null) {
-          if (versusData.bot.dead && state.mode === 'playing') {
+          const playerDead = state.mode === 'gameover';
+          const botDead = versusData.bot.dead;
+          if (botDead && !playerDead) {
             versusData.winner = 'player';
             state.mode = 'gameover';
-          } else if (state.mode === 'gameover') {
+          } else if (playerDead && !botDead) {
             versusData.winner = 'bot';
             versusData.bot.dead = true;
+          } else if (playerDead && botDead) {
+            // Both died on the same frame — player wins (their clear triggered the kill)
+            versusData.winner = 'player';
           }
         }
       }
@@ -430,10 +586,19 @@ function startGame(userId: string): void {
           versusData.botThinkAccumMs -= msPerPiece;
           const move = versusData.pendingMove;
           versusData.pendingMove = null;
-          applyBotMove(move, versusData.bot, versusData.botCombat, versusData.playerCombat);
+          const watchResult = applyBotMove(move, versusData.bot, versusData.botCombat, versusData.playerCombat);
+          if (watchResult && customAiWorker && !customAiError) {
+            customAiError = watchResult === 'floating'
+              ? `Floating piece: position (x:${move.x}, y:${move.y}, rot:${move.rotationIndex}) is not the lowest valid row — hard drop used instead`
+              : `Invalid position (x:${move.x}, y:${move.y}, rot:${move.rotationIndex}) was occupied — hard drop used instead`;
+          }
           if (!versusData.bot.dead) {
             requestMoveWithTimeout(versusData.bot, versusData.botCombat.pendingGarbage);
           }
+        }
+        if (!versusData.bot.dead && versusData.pendingMove === null &&
+            versusData.botThinkAccumMs >= msPerPiece && customAiWorker && !customAiWarning && !customAiError) {
+          customAiWarning = `AI is too slow for ${settings.botPps} PPS — move computation is taking longer than ${(1000 / settings.botPps).toFixed(0)} ms`;
         }
       }
     }
@@ -448,9 +613,19 @@ function startGame(userId: string): void {
         if (!botVsBotData.pendingMove1) break;
         botVsBotData.bot1ThinkAccumMs -= msPerPiece;
         const m = botVsBotData.pendingMove1; botVsBotData.pendingMove1 = null;
-        applyBotMove(m, botVsBotData.bot1, botVsBotData.bot1Combat, botVsBotData.bot2Combat);
+        const bvbResult = applyBotMove(m, botVsBotData.bot1, botVsBotData.bot1Combat, botVsBotData.bot2Combat);
+        if (bvbResult && customAiName && !customAiError) {
+          customAiError = bvbResult === 'floating'
+            ? `Floating piece: position (x:${m.x}, y:${m.y}, rot:${m.rotationIndex}) is not the lowest valid row — hard drop used instead`
+            : `Invalid position (x:${m.x}, y:${m.y}, rot:${m.rotationIndex}) was occupied — hard drop used instead`;
+        }
         if (!botVsBotData.bot1.dead && bvbWorker1)
-          requestBotMove(bvbWorker1, botVsBotData.bot1, botVsBotData.bot1Combat.pendingGarbage);
+          requestBvbBot1Move(botVsBotData.bot1, botVsBotData.bot1Combat.pendingGarbage);
+      }
+      if (!botVsBotData.bot1.dead && !botVsBotData.pendingMove1 &&
+          botVsBotData.bot1ThinkAccumMs >= msPerPiece && !customAiWarning && !customAiError) {
+        const bot1Label = customAiName ?? AI_DIFFICULTY_PARAMS[builtinDifficultyOf(selectedAiIndex) ?? 'medium'].label;
+        customAiWarning = `Bot 1 (${bot1Label}) is too slow for ${settings.botPps} PPS — reduce PPS in settings`;
       }
 
       while (botVsBotData.bot2ThinkAccumMs >= msPerPiece && !botVsBotData.bot2.dead) {
@@ -459,7 +634,11 @@ function startGame(userId: string): void {
         const m = botVsBotData.pendingMove2; botVsBotData.pendingMove2 = null;
         applyBotMove(m, botVsBotData.bot2, botVsBotData.bot2Combat, botVsBotData.bot1Combat);
         if (!botVsBotData.bot2.dead && bvbWorker2)
-          requestBotMove(bvbWorker2, botVsBotData.bot2, botVsBotData.bot2Combat.pendingGarbage);
+          requestBotMove(bvbWorker2, botVsBotData.bot2, botVsBotData.bot2Combat.pendingGarbage, AI_DIFFICULTY_PARAMS[bvbDifficulty]);
+      }
+      if (!botVsBotData.bot2.dead && !botVsBotData.pendingMove2 &&
+          botVsBotData.bot2ThinkAccumMs >= msPerPiece && !customAiWarning && !customAiError) {
+        customAiWarning = `Bot 2 (${AI_DIFFICULTY_PARAMS[bvbDifficulty].label}) is too slow for ${settings.botPps} PPS — reduce PPS in settings`;
       }
 
       // Winner detection
@@ -472,13 +651,19 @@ function startGame(userId: string): void {
       }
     }
 
-    draw(ctx, state, versusData, customAiName, botVsBotData);
+    // Compute display names for bot labels in versus/watch/BvB.
+    const builtinDiff = builtinDifficultyOf(selectedAiIndex);
+    const managerBotName = customAiName ?? AI_DIFFICULTY_PARAMS[builtinDiff ?? 'medium'].label;
+    const bot1Name = state.variant === 'versus'
+      ? (customAiName ?? AI_DIFFICULTY_PARAMS[versusDifficulty].label)
+      : managerBotName;
+    const bot2Name = AI_DIFFICULTY_PARAMS[bvbDifficulty].label;
+    draw(ctx, state, versusData, customAiName, botVsBotData, isAdmin, customAiError, customAiWarning, versusDifficultyPending || bvbDifficultyPending, bot1Name, bot2Name);
     flushInput(input);
-      state.rafHandle = requestAnimationFrame(gameLoop);
-    }
-
     state.rafHandle = requestAnimationFrame(gameLoop);
-  });
+  }
+
+  state.rafHandle = requestAnimationFrame(gameLoop);
 }
 
 setupAuthUI(startGame);

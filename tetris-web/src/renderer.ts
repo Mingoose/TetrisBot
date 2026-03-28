@@ -3,6 +3,7 @@ import { PIECE_COLORS, getRotation } from './pieces';
 import { hardDropY, BOARD_COLS, BOARD_ROWS } from './board';
 import { CELL_SIZE, BOARD_OFFSET_X, BOARD_OFFSET_Y } from './editor';
 import { VersusData, BotBoard, BotVsBotData } from './versus';
+import { MAX_HISTORY } from './rewind';
 
 const GRID_COLOR = '#1e1e3a';
 const BG_COLOR = '#0d0d1a';
@@ -30,21 +31,26 @@ export const VERSUS_CANVAS_W = BOT_BOARD_X + BOT_BOARD_W + 20;
 
 // Menu button rects — exported so main.ts can hit-test clicks
 export interface ButtonRect { x: number; y: number; w: number; h: number; }
-const BTN_W = 140;
-const BTN_H = 50;
+const BTN_W = 160;
+const BTN_H = 56;
 const BTN_GAP = 20;
-// Row 1: four game-mode buttons centred
 const MENU_CX = VERSUS_CANVAS_W / 2;
 const MENU_BY = CANVAS_H / 2 + 20;
-const MENU_BTN_START = MENU_CX - (4 * BTN_W + 3 * BTN_GAP) / 2;
-export const MENU_SPRINT_BTN:   ButtonRect = { x: MENU_BTN_START,                           y: MENU_BY, w: BTN_W, h: BTN_H };
-export const MENU_CREATIVE_BTN: ButtonRect = { x: MENU_BTN_START + BTN_W + BTN_GAP,         y: MENU_BY, w: BTN_W, h: BTN_H };
-export const MENU_VERSUS_BTN:   ButtonRect = { x: MENU_BTN_START + 2 * (BTN_W + BTN_GAP),   y: MENU_BY, w: BTN_W, h: BTN_H };
-export const MENU_WATCH_BTN:    ButtonRect = { x: MENU_BTN_START + 3 * (BTN_W + BTN_GAP),   y: MENU_BY, w: BTN_W, h: BTN_H };
-// Row 2: BOT VS BOT and AI MANAGER side by side
+// Row 1: three non-admin buttons centred
+const MENU_ROW1_START = MENU_CX - (3 * BTN_W + 2 * BTN_GAP) / 2;
+export const MENU_SPRINT_BTN:   ButtonRect = { x: MENU_ROW1_START,                         y: MENU_BY, w: BTN_W, h: BTN_H };
+export const MENU_CREATIVE_BTN: ButtonRect = { x: MENU_ROW1_START + BTN_W + BTN_GAP,       y: MENU_BY, w: BTN_W, h: BTN_H };
+export const MENU_VERSUS_BTN:   ButtonRect = { x: MENU_ROW1_START + 2 * (BTN_W + BTN_GAP), y: MENU_BY, w: BTN_W, h: BTN_H };
+// Row 2: difficulty selection (shown instead of row 1 when picking versus difficulty)
 const MENU_ROW2_Y = MENU_BY + BTN_H + BTN_GAP;
-export const MENU_BVB_BTN:    ButtonRect = { x: MENU_CX - BTN_W - BTN_GAP / 2, y: MENU_ROW2_Y, w: BTN_W, h: BTN_H };
-export const MENU_UPLOAD_BTN: ButtonRect = { x: MENU_CX + BTN_GAP / 2,         y: MENU_ROW2_Y, w: BTN_W, h: BTN_H };
+const MENU_ROW2_START = MENU_CX - (3 * BTN_W + 2 * BTN_GAP) / 2;
+export const MENU_DIFF_EASY_BTN:   ButtonRect = { x: MENU_ROW1_START,                         y: MENU_BY, w: BTN_W, h: BTN_H };
+export const MENU_DIFF_MEDIUM_BTN: ButtonRect = { x: MENU_ROW1_START + BTN_W + BTN_GAP,       y: MENU_BY, w: BTN_W, h: BTN_H };
+export const MENU_DIFF_HARD_BTN:   ButtonRect = { x: MENU_ROW1_START + 2 * (BTN_W + BTN_GAP), y: MENU_BY, w: BTN_W, h: BTN_H };
+// Row 3: three admin-only buttons centred
+export const MENU_WATCH_BTN:  ButtonRect = { x: MENU_ROW2_START,                         y: MENU_ROW2_Y, w: BTN_W, h: BTN_H };
+export const MENU_BVB_BTN:    ButtonRect = { x: MENU_ROW2_START + BTN_W + BTN_GAP,       y: MENU_ROW2_Y, w: BTN_W, h: BTN_H };
+export const MENU_UPLOAD_BTN: ButtonRect = { x: MENU_ROW2_START + 2 * (BTN_W + BTN_GAP), y: MENU_ROW2_Y, w: BTN_W, h: BTN_H };
 
 // Bot-vs-bot layout: two boards side by side at BOT_CELL_SIZE
 const BVB_CELL = BOT_CELL_SIZE;
@@ -132,20 +138,25 @@ export function draw(
   versusData?: VersusData | null,
   customAiName: string | null = null,
   botVsBotData?: BotVsBotData | null,
+  isAdmin = false,
+  customAiError: string | null = null,
+  customAiWarning: string | null = null,
+  difficultyPending = false,
+  bot1Name = 'BOT',
+  bot2Name = 'BOT',
 ): void {
   // Background — fill the full (possibly wider) canvas
   ctx.fillStyle = BG_COLOR;
   ctx.fillRect(0, 0, VERSUS_CANVAS_W, CANVAS_H);
 
   if (state.mode === 'menu') {
-    drawMenu(ctx, customAiName);
+    drawMenu(ctx, customAiName, isAdmin, difficultyPending);
     return;
   }
 
   if (state.variant === 'botvsbot' && botVsBotData) {
-    const bot1AiName = customAiName ?? 'built-in';
-    drawBvbBoard(ctx, botVsBotData.bot1, BVB_L_X, BVB_Y, 'BOT 1', botVsBotData.bot1Combat, bot1AiName);
-    drawBvbBoard(ctx, botVsBotData.bot2, BVB_R_X, BVB_Y, 'BOT 2', botVsBotData.bot2Combat, 'built-in');
+    drawBvbBoard(ctx, botVsBotData.bot1, BVB_L_X, BVB_Y, 'BOT 1', botVsBotData.bot1Combat, bot1Name);
+    drawBvbBoard(ctx, botVsBotData.bot2, BVB_R_X, BVB_Y, 'BOT 2', botVsBotData.bot2Combat, bot2Name);
     drawGarbageBar(ctx, botVsBotData.bot1Combat.pendingGarbage, BVB_L_X - 8, BVB_Y, BVB_H, BVB_CELL);
     drawGarbageBar(ctx, botVsBotData.bot2Combat.pendingGarbage, BVB_R_X + BVB_W + 3, BVB_Y, BVB_H, BVB_CELL);
     // VS divider
@@ -161,6 +172,8 @@ export function draw(
     ctx.font = '10px monospace';
     ctx.textAlign = 'center';
     ctx.fillText('R: rematch   Esc: menu', VERSUS_CANVAS_W / 2, BVB_Y + BVB_H + 14);
+    if (customAiError) drawAiError(ctx, customAiError);
+    else if (customAiWarning) drawAiWarning(ctx, customAiWarning);
     if (state.mode === 'gameover') drawBvbResult(ctx, botVsBotData.winner);
     return;
   }
@@ -169,7 +182,9 @@ export function draw(
     drawWatchBoard(ctx, versusData.bot);
     drawHoldBox(ctx, versusData.bot.hold, versusData.bot.holdUsed);
     drawNextQueue(ctx, versusData.bot.nextQueue);
-    drawWatchHUD(ctx, versusData.bot);
+    drawWatchHUD(ctx, versusData.bot, bot1Name);
+    if (customAiError) drawAiError(ctx, customAiError);
+    else if (customAiWarning) drawAiWarning(ctx, customAiWarning);
     if (versusData.bot.dead) drawOverlay(ctx, 'TOPPED OUT', '#ff6666');
     return;
   }
@@ -180,7 +195,7 @@ export function draw(
   drawHUD(ctx, state, versusData ?? null);
 
   if (versusData) {
-    drawBotSection(ctx, versusData);
+    drawBotSection(ctx, versusData, bot1Name);
     drawGarbageBar(ctx, versusData.playerCombat.pendingGarbage,
       BOARD_OFFSET_X - 9, BOARD_OFFSET_Y, BOARD_H, CELL_SIZE);
     drawGarbageBar(ctx, versusData.botCombat.pendingGarbage,
@@ -352,6 +367,11 @@ function drawHUD(ctx: CanvasRenderingContext2D, state: GameState, versusData: Ve
     drawHints(ctx, ['R: restart', 'P: pause', 'Esc: menu']);
   } else {
     drawHUDEntry(ctx, 'LINES', String(state.lines), x, startY);
+    const rewindCount = state.history.length;
+    ctx.fillStyle = rewindCount > 0 ? LABEL_COLOR : '#333355';
+    ctx.font = '10px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(`rewind  ${rewindCount}/${MAX_HISTORY}`, x, startY + 52);
     drawHints(ctx, ['R: rewind', 'E: editor', 'P: pause', 'Esc: menu']);
   }
 }
@@ -440,9 +460,9 @@ function drawBvbBoard(
     ctx.fillText(`${combat.combo + 1}× combo`, bx + BVB_W / 2, sy + 16);
   }
   if (aiName) {
-    ctx.fillStyle = '#444466';
-    ctx.font = '9px monospace';
-    const short = aiName.length > 24 ? aiName.substring(0, 22) + '…' : aiName;
+    ctx.fillStyle = '#667788';
+    ctx.font = '10px monospace';
+    const short = aiName.length > 20 ? aiName.substring(0, 18) + '…' : aiName;
     ctx.fillText(short, bx + BVB_W / 2, sy + 30);
   }
 }
@@ -469,23 +489,41 @@ function drawBvbResult(ctx: CanvasRenderingContext2D, winner: 'bot1' | 'bot2' | 
   ctx.fillText('R: rematch   Esc: menu', cx, cy + 20);
 }
 
-function drawMenu(ctx: CanvasRenderingContext2D, customAiName: string | null): void {
+function drawMenu(ctx: CanvasRenderingContext2D, customAiName: string | null, isAdmin: boolean, difficultyPending: boolean): void {
   ctx.fillStyle = '#aaaaff';
   ctx.font = 'bold 52px monospace';
   ctx.textAlign = 'center';
   ctx.fillText('TETRIS', MENU_CX, CANVAS_H / 2 - 50);
+
+  if (difficultyPending) {
+    ctx.fillStyle = LABEL_COLOR;
+    ctx.font = '13px monospace';
+    ctx.fillText('choose a difficulty', MENU_CX, CANVAS_H / 2 - 14);
+    drawMenuButton(ctx, MENU_DIFF_EASY_BTN,   'EASY',   '#66ffaa', 'greedy one-piece');
+    drawMenuButton(ctx, MENU_DIFF_MEDIUM_BTN, 'MEDIUM', '#ffcc44', 'beam search');
+    drawMenuButton(ctx, MENU_DIFF_HARD_BTN,   'HARD',   '#ff6666', 'beam search+');
+    ctx.fillStyle = LABEL_COLOR;
+    ctx.font = '11px monospace';
+    ctx.fillText('Esc to go back', MENU_CX, MENU_BY + BTN_H + 16);
+    return;
+  }
+
   ctx.fillStyle = LABEL_COLOR;
   ctx.font = '13px monospace';
   ctx.fillText('choose a mode', MENU_CX, CANVAS_H / 2 - 14);
-  drawMenuButton(ctx, MENU_SPRINT_BTN,   'SPRINT',   '#66ffaa', '40 lines, fastest time');
+  // Row 1 — available to all users
+  drawMenuButton(ctx, MENU_SPRINT_BTN,   'SPRINT',   '#66ffaa', 'race to 40 lines');
   drawMenuButton(ctx, MENU_CREATIVE_BTN, 'CREATIVE', '#aaaaff', 'free play + editor');
-  drawMenuButton(ctx, MENU_VERSUS_BTN,   'VERSUS',   '#ffaa44', 'vs bot, jstris rules');
-  drawMenuButton(ctx, MENU_WATCH_BTN,    'WATCH',    '#44ccff', 'watch AI play solo');
-  drawMenuButton(ctx, MENU_BVB_BTN,      'BOT VS BOT', '#ff8844', 'two AIs compete');
-  const aiSubtitle = customAiName
-    ? (customAiName.length > 18 ? customAiName.substring(0, 16) + '…' : customAiName)
-    : 'built-in active';
-  drawMenuButton(ctx, MENU_UPLOAD_BTN, 'AI MANAGER', '#ff88cc', aiSubtitle);
+  drawMenuButton(ctx, MENU_VERSUS_BTN,   'VERSUS',   '#ffaa44', 'pick a difficulty');
+  // Row 2 — admin only
+  if (isAdmin) {
+    drawMenuButton(ctx, MENU_WATCH_BTN,  'WATCH',      '#44ccff', 'watch AI play solo');
+    drawMenuButton(ctx, MENU_BVB_BTN,    'BOT VS BOT', '#ff8844', 'two AIs compete');
+    const aiSubtitle = customAiName
+      ? (customAiName.length > 20 ? customAiName.substring(0, 18) + '…' : customAiName)
+      : 'upload & select AI';
+    drawMenuButton(ctx, MENU_UPLOAD_BTN, 'AI MANAGER', '#ff88cc', aiSubtitle);
+  }
 }
 
 function drawGarbageBar(
@@ -503,12 +541,13 @@ function drawGarbageBar(
   ctx.fillRect(barX, boardY + boardH - barH, 5, barH);
 }
 
-function drawBotSection(ctx: CanvasRenderingContext2D, data: VersusData): void {
+function drawBotSection(ctx: CanvasRenderingContext2D, data: VersusData, botName = 'BOT'): void {
   const bot = data.bot;
+  const shortName = botName.length > 18 ? botName.substring(0, 16) + '…' : botName;
   ctx.fillStyle = '#888899';
   ctx.font = '11px monospace';
   ctx.textAlign = 'center';
-  ctx.fillText('BOT', BOT_BOARD_X + BOT_BOARD_W / 2, BOT_BOARD_Y - 6);
+  ctx.fillText(shortName, BOT_BOARD_X + BOT_BOARD_W / 2, BOT_BOARD_Y - 6);
 
   ctx.fillStyle = '#0a0a1e';
   ctx.fillRect(BOT_BOARD_X, BOT_BOARD_Y, BOT_BOARD_W, BOT_BOARD_H);
@@ -539,10 +578,65 @@ function drawWatchBoard(ctx: CanvasRenderingContext2D, bot: BotBoard): void {
   drawBoardBorder(ctx, BOARD_OFFSET_X, BOARD_OFFSET_Y, BOARD_W, BOARD_H);
 }
 
-function drawWatchHUD(ctx: CanvasRenderingContext2D, bot: BotBoard): void {
+function drawAiBanner(
+  ctx: CanvasRenderingContext2D,
+  message: string,
+  bgColor: string,
+  borderColor: string,
+  textColor: string,
+): void {
+  const padding = 10;
+  const maxWidth = VERSUS_CANVAS_W - padding * 2;
+  ctx.font = '11px monospace';
+  const words = message.split(' ');
+  const lines: string[] = [];
+  let current = '';
+  for (const word of words) {
+    const test = current ? `${current} ${word}` : word;
+    if (ctx.measureText(test).width > maxWidth - 16 && current) {
+      lines.push(current);
+      current = word;
+    } else {
+      current = test;
+    }
+  }
+  if (current) lines.push(current);
+
+  const lineH = 16;
+  const bannerH = lines.length * lineH + padding * 2;
+  const bannerY = CANVAS_H - bannerH - 4;
+
+  ctx.fillStyle = bgColor;
+  ctx.fillRect(0, bannerY, VERSUS_CANVAS_W, bannerH);
+  ctx.strokeStyle = borderColor;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(0, bannerY, VERSUS_CANVAS_W, bannerH);
+
+  ctx.fillStyle = textColor;
+  ctx.textAlign = 'left';
+  lines.forEach((line, i) => {
+    ctx.fillText(line, padding, bannerY + padding + lineH * i + 11);
+  });
+}
+
+function drawAiWarning(ctx: CanvasRenderingContext2D, message: string): void {
+  drawAiBanner(ctx, message, 'rgba(60,40,0,0.92)', '#886600', '#ffcc44');
+}
+
+function drawAiError(ctx: CanvasRenderingContext2D, message: string): void {
+  drawAiBanner(ctx, message, 'rgba(60,0,0,0.92)', '#882222', '#ff8888');
+}
+
+function drawWatchHUD(ctx: CanvasRenderingContext2D, bot: BotBoard, botName = 'BOT'): void {
   const x = HOLD_X;
   const startY = HOLD_Y + 100;
   drawHUDEntry(ctx, 'LINES', String(bot.lines), x, startY);
+  // Show bot name above the board
+  const shortName = botName.length > 18 ? botName.substring(0, 16) + '…' : botName;
+  ctx.fillStyle = '#888899';
+  ctx.font = '11px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(shortName, BOARD_OFFSET_X + BOARD_W / 2, BOARD_OFFSET_Y - 6);
   drawHints(ctx, ['R: new game', 'Esc: menu']);
 }
 

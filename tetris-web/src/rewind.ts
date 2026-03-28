@@ -1,6 +1,6 @@
 import { GameState, Snapshot } from './types';
 
-const MAX_HISTORY = 50;
+export const MAX_HISTORY = 50;
 
 export function takeSnapshot(state: GameState): Snapshot {
   return structuredClone({
@@ -40,5 +40,6 @@ export function rewind(state: GameState): void {
   state.lockResetCount = 0;
   state.gravityAccumMs = 0;
   state.lastFrameTime = 0;
-  state.mode = 'playing';
+  // Preserve paused state; for any other non-playing mode (e.g. gameover) restore to playing
+  if (state.mode !== 'paused') state.mode = 'playing';
 }
