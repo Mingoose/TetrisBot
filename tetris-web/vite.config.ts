@@ -21,6 +21,14 @@ const CSP = [
 ].join('; ');
 
 export default defineConfig({
+  build: {
+    rollupOptions: {
+      input: {
+        main: 'index.html',
+        'ai-guide': 'ai-guide.html',
+      },
+    },
+  },
   server: {
     headers: {
       'Content-Security-Policy': CSP,
