@@ -1,4 +1,5 @@
 import { ActivePiece, CellValue, PieceType } from './types';
+import type { EngineMove, EngineRequest, EngineAnalysis } from './engine';
 import {
   collides, lockAndClear, hardDropY,
   BOARD_COLS, BOARD_ROWS, countTSpinCorners,
@@ -518,6 +519,74 @@ export function findBestMove(
   return beam[0]?.firstMove ?? { rotationIndex: 0, x: 0, y: 0, useHold: false };
 }
 
+// ---- Engine analysis ----
+// Same beam search as findBestMoveHard, but:
+//   • movePath tracking is enabled (root initialized with movePath: [])
+//   • Returns top N distinct first-move lines instead of a single best move
+//   • Intended for human-facing analysis (creative pause, post-match review, etc.)
+
+export function analyzePositionHard(request: EngineRequest): EngineAnalysis {
+  const t0 = performance.now();
+  const { board, activeType, nextQueue, hold, holdUsed, bagState,
+          combo, b2bActive, pendingGarbage, beamWidth, searchDepth, topN } = request;
+
+  const targetWellCol = pickTargetWellCol(board);
+
+  let beam: BeamNodeHard[] = [{
+    board,
+    activeType,
+    nextQueue: [...nextQueue],
+    hold,
+    holdUsed,
+    bagState: [...bagState],
+    score: 0,
+    garbageSent: 0,
+    combo: combo ?? -1,
+    b2bActive: b2bActive ?? false,
+    targetWellCol,
+    firstMove: null,
+    movePath: [],  // empty array enables path tracking in expandBeamNodeHardHard
+  }];
+
+  for (let d = 0; d < searchDepth; d++) {
+    const nextBeam: BeamNodeHard[] = [];
+    for (const node of beam) {
+      nextBeam.push(...expandBeamNodeHardHard(node, pendingGarbage));
+    }
+    if (nextBeam.length === 0) break;
+    nextBeam.sort((a, b) =>
+      (b.score + b.garbageSent * W.garbageValue) -
+      (a.score + a.garbageSent * W.garbageValue),
+    );
+    beam = nextBeam.slice(0, beamWidth);
+  }
+
+  // Deduplicate by first move — keep the best-scoring terminal node per unique first placement.
+  const seen = new Map<string, BeamNodeHard>();
+  for (const node of beam) {
+    if (!node.firstMove || !node.movePath) continue;
+    const key = `${node.firstMove.rotationIndex},${node.firstMove.x},${node.firstMove.y},${node.firstMove.useHold ? 1 : 0}`;
+    const cur = seen.get(key);
+    const rank = node.score + node.garbageSent * W.garbageValue;
+    if (!cur || rank > (cur.score + cur.garbageSent * W.garbageValue)) {
+      seen.set(key, node);
+    }
+  }
+
+  const lines: EngineAnalysis['lines'] = [...seen.values()]
+    .sort((a, b) =>
+      (b.score + b.garbageSent * W.garbageValue) -
+      (a.score + a.garbageSent * W.garbageValue),
+    )
+    .slice(0, topN)
+    .map(node => ({
+      moves: node.movePath!,
+      score: node.score + node.garbageSent * W.garbageValue,
+      garbageSent: node.garbageSent,
+    }));
+
+  return { lines, durationMs: performance.now() - t0 };
+}
 // ---- Hard AI — advanced beam search ----
 // Stable well column, combo/b2b tracking, perfect-clear detection, terminal-quality ranking.
 
@@ -681,6 +750,8 @@ interface BeamNodeHard {
   b2bActive: boolean;    // back-to-back T-spin/Tetris qualifier active
   targetWellCol: number; // fixed well column for the entire search (set once at root)
   firstMove: { rotationIndex: number; x: number; y: number; useHold: boolean } | null;
+  // null = normal bot mode (no path tracking); [] = engine analysis mode (full path tracked)
+  movePath: EngineMove[] | null;
 }
 
 // Expand one beam node into all possible successor nodes (one piece placed).
@@ -785,6 +856,17 @@ function expandBeamNodeHardHard(node: BeamNodeHard, pendingGarbage: number): Bea
         useHold: opt.useHold,
       };
 
+      // Track full move sequence when in engine analysis mode (movePath non-null on root).
+      const movePath = node.movePath !== null
+        ? [...node.movePath, {
+            pieceType: opt.pieceType,
+            rotationIndex: placement.rotationIndex,
+            x: placement.x,
+            y: placement.y,
+            useHold: opt.useHold,
+          } satisfies EngineMove]
+        : null;
+
       successors.push({
         board: clearedBoard,
         activeType: opt.nextActiveType,
@@ -798,6 +880,7 @@ function expandBeamNodeHardHard(node: BeamNodeHard, pendingGarbage: number): Bea
         b2bActive: nextB2b,
         targetWellCol: node.targetWellCol,
         firstMove,
+        movePath,
       });
     }
   }
@@ -831,6 +914,7 @@ export function findBestMoveHard(
     b2bActive: bot.b2bActive ?? false,
     targetWellCol,
     firstMove: null,
+    movePath: null,
   }];
 
   for (let d = 0; d < searchDepth; d++) {

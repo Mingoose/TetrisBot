@@ -10,6 +10,7 @@ export interface KeyBindings {
   rewind: string;
   editor: string;
   pause: string;
+  engineAnalysis: string;
 }
 
 export interface Settings {
@@ -34,9 +35,10 @@ export const DEFAULT_KEYBINDINGS: KeyBindings = {
   rotateCCW: 'KeyZ',
   rotate180: 'KeyA',
   hold:      'KeyC',
-  rewind:    'KeyR',
-  editor:    'KeyE',
-  pause:     'KeyP',
+  rewind:         'KeyR',
+  editor:         'KeyE',
+  pause:          'KeyP',
+  engineAnalysis: 'KeyF',
 };
 
 export const ACTION_LABELS: Record<keyof KeyBindings, string> = {
@@ -48,9 +50,10 @@ export const ACTION_LABELS: Record<keyof KeyBindings, string> = {
   rotateCCW: 'Rotate CCW',
   rotate180: 'Rotate 180°',
   hold:      'Hold Piece',
-  rewind:    'Rewind',
-  editor:    'Editor Mode',
-  pause:     'Pause',
+  rewind:         'Rewind',
+  editor:         'Editor Mode',
+  pause:          'Pause',
+  engineAnalysis: 'Engine Analysis',
 };
 
 // Human-readable key code labels

@@ -14,6 +14,9 @@ import { Settings } from './settings';
 import { setupSettingsUI } from './settingsUI';
 import { GameVariant } from './types';
 import { VersusData, BotVsBotData, BotBoard, initVersusData, initBotVsBotData, applyBotMove, requestBotMove, setupPlayerLockHook } from './versus';
+import { drawEngineOverlay } from './engineOverlay';
+import { gameStateToEngineRequest } from './engine';
+import type { EngineAnalysis } from './engine';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 canvas.width = VERSUS_CANVAS_W;
@@ -95,6 +98,38 @@ let versusDifficulty: AiDifficulty = 'medium';
 let versusDifficultyPending = false;
 let bvbDifficulty: AiDifficulty = 'medium';
 let bvbDifficultyPending = false;
+
+// ---- Engine analysis state ----
+let engineMode = false;
+let engineAnalysis: EngineAnalysis | null = null;
+let engineSelectedLine = 0;
+let engineWorker: Worker | null = null;
+
+function startEngineMode(): void {
+  engineMode = true;
+  engineAnalysis = null;
+  engineSelectedLine = 0;
+
+  if (!engineWorker) {
+    engineWorker = new Worker(new URL('./ai.worker.ts', import.meta.url), { type: 'module' });
+    engineWorker.onerror = (e) => console.error('Engine worker error:', e.message);
+    engineWorker.onmessage = (e: MessageEvent) => {
+      if (e.data?.type === 'analysis') {
+        engineAnalysis = e.data.result as EngineAnalysis;
+        engineSelectedLine = 0;
+      }
+    };
+  }
+
+  const request = gameStateToEngineRequest(state, { beamWidth: 48, searchDepth: 6, topN: 5 });
+  engineWorker.postMessage({ type: 'analyze', request });
+}
+
+function stopEngineMode(): void {
+  engineMode = false;
+  engineAnalysis = null;
+  engineSelectedLine = 0;
+}
 
 // ---- Bot vs Bot state ----
 let botVsBotData: BotVsBotData | null = null;
@@ -519,6 +554,11 @@ async function startGame(userId: string): Promise<void> {
     if (botVsBotData !== null && state.mode === 'menu') {
       stopBvbWorkers();
     }
+    if (engineMode && state.mode === 'menu') {
+      stopEngineMode();
+      engineWorker?.terminate();
+      engineWorker = null;
+    }
 
     // Watch / bot-vs-bot: handle input directly (no player game to advance)
     if ((state.variant === 'watch' || state.variant === 'botvsbot') && state.mode !== 'menu') {
@@ -571,6 +611,27 @@ async function startGame(userId: string): Promise<void> {
           }
         }
       }
+    }
+
+    // Engine analysis — creative mode only, while paused
+    if (state.variant === 'creative') {
+      if (state.mode === 'paused') {
+        if (wasJustPressed(input, settings.keybindings.engineAnalysis)) {
+          if (engineMode) stopEngineMode();
+          else startEngineMode();
+        }
+        if (engineMode && engineAnalysis && engineAnalysis.lines.length > 0) {
+          const lineCount = engineAnalysis.lines.length;
+          if (wasJustPressed(input, 'ArrowDown')) {
+            engineSelectedLine = (engineSelectedLine + 1) % lineCount;
+          }
+          if (wasJustPressed(input, 'ArrowUp')) {
+            engineSelectedLine = (engineSelectedLine - 1 + lineCount) % lineCount;
+          }
+        }
+      }
+      // Exit engine mode whenever the game is no longer paused
+      if (engineMode && state.mode !== 'paused') stopEngineMode();
     }
 
     // Step bot for versus (when playing) and watch (until topped out)
@@ -659,6 +720,9 @@ async function startGame(userId: string): Promise<void> {
       : managerBotName;
     const bot2Name = AI_DIFFICULTY_PARAMS[bvbDifficulty].label;
     draw(ctx, state, versusData, customAiName, botVsBotData, isAdmin, customAiError, customAiWarning, versusDifficultyPending || bvbDifficultyPending, bot1Name, bot2Name);
+    if (engineMode && state.mode === 'paused' && state.variant === 'creative') {
+      drawEngineOverlay(ctx, engineAnalysis, engineSelectedLine, state.board);
+    }
     flushInput(input);
     state.rafHandle = requestAnimationFrame(gameLoop);
   }
