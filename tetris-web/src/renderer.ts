@@ -1,9 +1,12 @@
 import { GameState, CellValue, PieceType, ActivePiece } from './types';
+import type { SprintReplay, VersusReplay } from './replay';
+import { getReplayFrameIndex, getVersusReplayFrameIndex } from './replay';
 import { PIECE_COLORS, getRotation } from './pieces';
 import { hardDropY, BOARD_COLS, BOARD_ROWS } from './board';
 import { CELL_SIZE, BOARD_OFFSET_X, BOARD_OFFSET_Y } from './editor';
 import { VersusData, BotBoard, BotVsBotData } from './versus';
 import { MAX_HISTORY } from './rewind';
+import { KeyBindings, DEFAULT_KEYBINDINGS, keyLabel } from './settings';
 
 const GRID_COLOR = '#1e1e3a';
 const BG_COLOR = '#0d0d1a';
@@ -144,6 +147,7 @@ export function draw(
   difficultyPending = false,
   bot1Name = 'BOT',
   bot2Name = 'BOT',
+  keybindings: KeyBindings = DEFAULT_KEYBINDINGS,
 ): void {
   // Background — fill the full (possibly wider) canvas
   ctx.fillStyle = BG_COLOR;
@@ -192,7 +196,7 @@ export function draw(
   drawBoard(ctx, state);
   drawHoldBox(ctx, state.hold, state.holdUsed);
   drawNextQueue(ctx, state.nextQueue);
-  drawHUD(ctx, state, versusData ?? null);
+  drawHUD(ctx, state, versusData ?? null, keybindings);
 
   if (versusData) {
     drawBotSection(ctx, versusData, bot1Name);
@@ -203,7 +207,13 @@ export function draw(
   }
 
   if (state.mode === 'countdown') drawCountdown(ctx, state);
-  if (state.mode === 'paused') drawOverlay(ctx, 'PAUSED', '#aaaaff');
+  if (state.mode === 'paused') {
+    const pauseSubtext = `${keyLabel(keybindings.pause)}: resume   Esc: menu`;
+    const engineHint = state.variant === 'creative'
+      ? `${keyLabel(keybindings.engineAnalysis)}: engine analysis`
+      : undefined;
+    drawOverlay(ctx, 'PAUSED', '#aaaaff', pauseSubtext, engineHint);
+  }
   if (state.mode === 'gameover') {
     if (state.variant === 'sprint') drawSprintComplete(ctx, state);
     else if (state.variant === 'versus') drawVersusResult(ctx, versusData?.winner ?? null);
@@ -344,7 +354,7 @@ function formatSprintTime(ms: number): string {
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(cs).padStart(2, '0')}`;
 }
 
-function drawHUD(ctx: CanvasRenderingContext2D, state: GameState, versusData: VersusData | null): void {
+function drawHUD(ctx: CanvasRenderingContext2D, state: GameState, versusData: VersusData | null, kb: KeyBindings): void {
   const x = HOLD_X;
   const startY = HOLD_Y + 100;
 
@@ -354,7 +364,11 @@ function drawHUD(ctx: CanvasRenderingContext2D, state: GameState, versusData: Ve
       : (state.sprintStartTime > 0 ? state.lastFrameTime - state.sprintStartTime : 0);
     drawHUDEntry(ctx, 'TIME', formatSprintTime(elapsedMs), x, startY);
     drawHUDEntry(ctx, 'LEFT', String(Math.max(0, 40 - state.lines)), x, startY + 52);
-    drawHints(ctx, ['R: restart', 'P: pause', 'Esc: menu']);
+    drawHints(ctx, [
+      `${keyLabel(kb.rewind)}: restart`,
+      `${keyLabel(kb.pause)}: pause`,
+      'Esc: menu',
+    ]);
   } else if (state.variant === 'versus') {
     drawHUDEntry(ctx, 'LINES', String(state.lines), x, startY);
     const combo = versusData ? versusData.playerCombat.combo : -1;
@@ -364,7 +378,11 @@ function drawHUD(ctx: CanvasRenderingContext2D, state: GameState, versusData: Ve
       ctx.textAlign = 'left';
       ctx.fillText(`${combo + 1}× combo`, x, startY + 52);
     }
-    drawHints(ctx, ['R: restart', 'P: pause', 'Esc: menu']);
+    drawHints(ctx, [
+      `${keyLabel(kb.rewind)}: restart`,
+      `${keyLabel(kb.pause)}: pause`,
+      'Esc: menu',
+    ]);
   } else {
     drawHUDEntry(ctx, 'LINES', String(state.lines), x, startY);
     const rewindCount = state.history.length;
@@ -372,11 +390,16 @@ function drawHUD(ctx: CanvasRenderingContext2D, state: GameState, versusData: Ve
     ctx.font = '10px monospace';
     ctx.textAlign = 'left';
     ctx.fillText(`rewind  ${rewindCount}/${MAX_HISTORY}`, x, startY + 52);
-    drawHints(ctx, ['R: rewind', 'E: editor', 'P: pause', 'Esc: menu']);
+    drawHints(ctx, [
+      `${keyLabel(kb.rewind)}: rewind`,
+      `${keyLabel(kb.editor)}: editor`,
+      `${keyLabel(kb.pause)}: pause`,
+      'Esc: menu',
+    ]);
   }
 }
 
-function drawOverlay(ctx: CanvasRenderingContext2D, text: string, color: string): void {
+function drawOverlay(ctx: CanvasRenderingContext2D, text: string, color: string, subtext = 'R: restart   Esc: menu', extraHint?: string): void {
   const cx = BOARD_OFFSET_X + BOARD_W / 2;
   const cy = BOARD_OFFSET_Y + BOARD_H / 2;
   ctx.fillStyle = 'rgba(0,0,0,0.65)';
@@ -387,7 +410,12 @@ function drawOverlay(ctx: CanvasRenderingContext2D, text: string, color: string)
   ctx.fillText(text, cx, cy - 10);
   ctx.fillStyle = TEXT_COLOR;
   ctx.font = '13px monospace';
-  ctx.fillText('R: restart   Esc: menu', cx, cy + 20);
+  ctx.fillText(subtext, cx, cy + 20);
+  if (extraHint) {
+    ctx.fillStyle = LABEL_COLOR;
+    ctx.font = '11px monospace';
+    ctx.fillText(extraHint, cx, cy + 40);
+  }
 }
 
 function drawSprintComplete(ctx: CanvasRenderingContext2D, state: GameState): void {
@@ -405,6 +433,9 @@ function drawSprintComplete(ctx: CanvasRenderingContext2D, state: GameState): vo
   ctx.fillStyle = LABEL_COLOR;
   ctx.font = '13px monospace';
   ctx.fillText('R: play again   Esc: menu', cx, cy + 38);
+  ctx.fillStyle = '#5555aa';
+  ctx.font = '11px monospace';
+  ctx.fillText('W: watch replay', cx, cy + 56);
 }
 
 function drawMenuButton(
@@ -660,6 +691,9 @@ function drawVersusResult(ctx: CanvasRenderingContext2D, winner: 'player' | 'bot
   ctx.fillStyle = TEXT_COLOR;
   ctx.font = '13px monospace';
   ctx.fillText('R: rematch   Esc: menu', cx, cy + 20);
+  ctx.fillStyle = '#5555aa';
+  ctx.font = '11px monospace';
+  ctx.fillText('W: watch replay', cx, cy + 40);
 
   // Overlay on bot board if bot won (to show player what happened)
   if (winner === 'bot') {
@@ -698,4 +732,229 @@ function drawEditorBanner(ctx: CanvasRenderingContext2D): void {
   ctx.fillStyle = LABEL_COLOR;
   ctx.font = '11px monospace';
   ctx.fillText('E: resume game', BOARD_OFFSET_X + BOARD_W / 2, BOARD_OFFSET_Y + 36);
+}
+
+// ---- Replay screen ----
+
+/**
+ * Draw a full replay frame for a sprint replay.
+ * Covers the full canvas so it can be used as the sole draw call for a frame.
+ */
+export function drawReplayScreen(
+  ctx: CanvasRenderingContext2D,
+  replay: SprintReplay,
+  replayElapsedMs: number,
+  paused: boolean,
+): void {
+  ctx.fillStyle = BG_COLOR;
+  ctx.fillRect(0, 0, VERSUS_CANVAS_W, CANVAS_H);
+
+  const frameIdx = getReplayFrameIndex(replay, replayElapsedMs);
+  const isDone   = frameIdx === -1;
+  const snap     = isDone ? null : replay.entries[frameIdx].snapshot;
+  const lastSnap = replay.entries[replay.entries.length - 1]?.snapshot;
+
+  const board      = isDone ? replay.finalBoard : snap!.board;
+  const active     = isDone ? null             : snap!.active;
+  const hold       = isDone ? (lastSnap?.hold ?? null)       : snap!.hold;
+  const holdUsed   = isDone ? false                          : snap!.holdUsed;
+  const nextQueue  = isDone ? (lastSnap?.nextQueue ?? [])    : snap!.nextQueue;
+  const lines      = isDone ? 40                             : snap!.lines;
+
+  // Board background + grid
+  ctx.fillStyle = '#0a0a1e';
+  ctx.fillRect(BOARD_OFFSET_X, BOARD_OFFSET_Y, BOARD_W, BOARD_H);
+  drawGrid(ctx, BOARD_OFFSET_X, BOARD_OFFSET_Y, BOARD_COLS, BOARD_ROWS, CELL_SIZE);
+
+  // Locked cells
+  drawLockedCells(ctx, board, BOARD_OFFSET_X, BOARD_OFFSET_Y, CELL_SIZE);
+
+  // Active piece at landing position (replay ghost)
+  if (active) {
+    const color = PIECE_COLORS[active.type];
+    const rot   = getRotation(active.type, active.rotationIndex);
+    for (let r = 0; r < rot.length; r++) {
+      for (let c = 0; c < rot[r].length; c++) {
+        if (!rot[r][c]) continue;
+        const row = active.y + r;
+        const col = active.x + c;
+        if (row >= 0 && row < BOARD_ROWS && col >= 0 && col < BOARD_COLS) {
+          drawCell(ctx, BOARD_OFFSET_X + col * CELL_SIZE, BOARD_OFFSET_Y + row * CELL_SIZE, CELL_SIZE, color);
+        }
+      }
+    }
+  }
+
+  drawBoardBorder(ctx, BOARD_OFFSET_X, BOARD_OFFSET_Y, BOARD_W, BOARD_H);
+
+  // Side panels
+  drawHoldBox(ctx, hold, holdUsed);
+  drawNextQueue(ctx, nextQueue);
+
+  // HUD
+  const x      = HOLD_X;
+  const startY = HOLD_Y + 100;
+  drawHUDEntry(ctx, 'REPLAY', formatSprintTime(isDone ? replay.finalElapsedMs : replayElapsedMs), x, startY);
+  drawHUDEntry(ctx, 'LINES',  String(lines), x, startY + 52);
+  drawHints(ctx, paused
+    ? ['Space: resume', 'R: restart', 'Esc: back']
+    : ['Space: pause',  'R: restart', 'Esc: back'],
+  );
+
+  // Overlays
+  if (paused && !isDone) {
+    drawOverlay(ctx, 'PAUSED', '#aaaaff', 'Space: resume   Esc: back');
+  } else if (isDone) {
+    // Sprint complete overlay — same style as the live sprint complete screen
+    const cx = BOARD_OFFSET_X + BOARD_W / 2;
+    const cy = BOARD_OFFSET_Y + BOARD_H / 2;
+    ctx.fillStyle = 'rgba(0,0,0,0.65)';
+    ctx.fillRect(BOARD_OFFSET_X, BOARD_OFFSET_Y, BOARD_W, BOARD_H);
+    ctx.fillStyle = '#66ffaa';
+    ctx.font = 'bold 22px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('SPRINT COMPLETE', cx, cy - 18);
+    ctx.fillStyle = TEXT_COLOR;
+    ctx.font = 'bold 26px monospace';
+    ctx.fillText(formatSprintTime(replay.finalElapsedMs), cx, cy + 14);
+    ctx.fillStyle = LABEL_COLOR;
+    ctx.font = '13px monospace';
+    ctx.fillText('R: watch again   Esc: back', cx, cy + 38);
+  }
+}
+
+// ---- Versus replay screen ----
+
+/**
+ * Draw a full replay frame for a versus replay, covering the full canvas.
+ */
+export function drawVersusReplayScreen(
+  ctx: CanvasRenderingContext2D,
+  replay: VersusReplay,
+  replayElapsedMs: number,
+  paused: boolean,
+): void {
+  ctx.fillStyle = BG_COLOR;
+  ctx.fillRect(0, 0, VERSUS_CANVAS_W, CANVAS_H);
+
+  const frameIdx = getVersusReplayFrameIndex(replay, replayElapsedMs);
+  const isDone    = frameIdx === -1;
+  const entry     = isDone ? null : replay.entries[frameIdx];
+  const lastEntry = replay.entries[replay.entries.length - 1];
+
+  // ---- Player board ----
+  const playerBoard   = isDone ? replay.finalPlayerBoard : entry!.playerSnapshot.board;
+  const playerActive  = isDone ? null                    : entry!.playerSnapshot.active;
+  const playerHold    = isDone ? (lastEntry?.playerSnapshot.hold    ?? null) : entry!.playerSnapshot.hold;
+  const playerHoldUsed = isDone ? false                              : entry!.playerSnapshot.holdUsed;
+  const playerNext    = isDone ? (lastEntry?.playerSnapshot.nextQueue ?? []) : entry!.playerSnapshot.nextQueue;
+  const playerLines   = isDone ? (lastEntry?.playerSnapshot.lines   ?? 0)   : entry!.playerSnapshot.lines;
+
+  ctx.fillStyle = '#0a0a1e';
+  ctx.fillRect(BOARD_OFFSET_X, BOARD_OFFSET_Y, BOARD_W, BOARD_H);
+  drawGrid(ctx, BOARD_OFFSET_X, BOARD_OFFSET_Y, BOARD_COLS, BOARD_ROWS, CELL_SIZE);
+  drawLockedCells(ctx, playerBoard, BOARD_OFFSET_X, BOARD_OFFSET_Y, CELL_SIZE);
+
+  // Draw active piece at its stored (landing) position — no ghost, same as sprint replay
+  if (playerActive) {
+    const color = PIECE_COLORS[playerActive.type];
+    const rot   = getRotation(playerActive.type, playerActive.rotationIndex);
+    for (let r = 0; r < rot.length; r++) {
+      for (let c = 0; c < rot[r].length; c++) {
+        if (!rot[r][c]) continue;
+        const row = playerActive.y + r;
+        const col = playerActive.x + c;
+        if (row >= 0 && row < BOARD_ROWS && col >= 0 && col < BOARD_COLS) {
+          drawCell(ctx, BOARD_OFFSET_X + col * CELL_SIZE, BOARD_OFFSET_Y + row * CELL_SIZE, CELL_SIZE, color);
+        }
+      }
+    }
+  }
+  drawBoardBorder(ctx, BOARD_OFFSET_X, BOARD_OFFSET_Y, BOARD_W, BOARD_H);
+
+  drawHoldBox(ctx, playerHold, playerHoldUsed);
+  drawNextQueue(ctx, playerNext);
+
+  // ---- Bot board ----
+  const botBoard  = isDone ? replay.finalBotBoard                    : entry!.botSnapshot.board;
+  const botActive = isDone ? null                                     : entry!.botSnapshot.active;
+  const botLines  = isDone ? (lastEntry?.botSnapshot.lines ?? 0)     : entry!.botSnapshot.lines;
+  const botDead   = isDone ? true                                     : entry!.botSnapshot.dead;
+
+  ctx.fillStyle = '#888899';
+  ctx.font = '11px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('BOT', BOT_BOARD_X + BOT_BOARD_W / 2, BOT_BOARD_Y - 6);
+
+  ctx.fillStyle = '#0a0a1e';
+  ctx.fillRect(BOT_BOARD_X, BOT_BOARD_Y, BOT_BOARD_W, BOT_BOARD_H);
+  drawGrid(ctx, BOT_BOARD_X, BOT_BOARD_Y, BOARD_COLS, BOARD_ROWS, BOT_CELL_SIZE);
+  drawLockedCells(ctx, botBoard, BOT_BOARD_X, BOT_BOARD_Y, BOT_CELL_SIZE);
+
+  // Draw bot's active piece at stored position (no ghost)
+  if (botActive && !botDead) {
+    const color = PIECE_COLORS[botActive.type];
+    const rot   = getRotation(botActive.type, botActive.rotationIndex);
+    for (let r = 0; r < rot.length; r++) {
+      for (let c = 0; c < rot[r].length; c++) {
+        if (!rot[r][c]) continue;
+        const row = botActive.y + r;
+        const col = botActive.x + c;
+        if (row >= 0 && row < BOARD_ROWS && col >= 0 && col < BOARD_COLS) {
+          drawCell(ctx, BOT_BOARD_X + col * BOT_CELL_SIZE, BOT_BOARD_Y + row * BOT_CELL_SIZE, BOT_CELL_SIZE, color);
+        }
+      }
+    }
+  }
+  drawBoardBorder(ctx, BOT_BOARD_X, BOT_BOARD_Y, BOT_BOARD_W, BOT_BOARD_H);
+
+  ctx.fillStyle = '#666688';
+  ctx.font = '11px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(`LINES  ${botLines}`, BOT_BOARD_X + BOT_BOARD_W / 2, BOT_BOARD_Y + BOT_BOARD_H + 14);
+
+  // ---- HUD ----
+  const hudX = HOLD_X;
+  const hudY = HOLD_Y + 100;
+  drawHUDEntry(ctx, 'REPLAY', formatSprintTime(isDone ? replay.finalElapsedMs : replayElapsedMs), hudX, hudY);
+  drawHUDEntry(ctx, 'LINES',  String(playerLines), hudX, hudY + 52);
+  drawHints(ctx, paused
+    ? ['Space: resume', 'R: restart', 'Esc: back']
+    : ['Space: pause',  'R: restart', 'Esc: back'],
+  );
+
+  // ---- Overlays ----
+  if (paused && !isDone) {
+    drawOverlay(ctx, 'PAUSED', '#aaaaff', 'Space: resume   Esc: back');
+  } else if (isDone) {
+    const cx = BOARD_OFFSET_X + BOARD_W / 2;
+    const cy = BOARD_OFFSET_Y + BOARD_H / 2;
+    ctx.fillStyle = 'rgba(0,0,0,0.65)';
+    ctx.fillRect(BOARD_OFFSET_X, BOARD_OFFSET_Y, BOARD_W, BOARD_H);
+    if (replay.winner === 'player') {
+      ctx.fillStyle = '#66ffaa';
+      ctx.font = 'bold 28px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText('YOU WIN!', cx, cy - 10);
+    } else {
+      ctx.fillStyle = '#ff6666';
+      ctx.font = 'bold 28px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText('GAME OVER', cx, cy - 10);
+    }
+    ctx.fillStyle = TEXT_COLOR;
+    ctx.font = '13px monospace';
+    ctx.fillText('R: watch again   Esc: back', cx, cy + 20);
+
+    if (replay.winner === 'bot') {
+      const bcx = BOT_BOARD_X + BOT_BOARD_W / 2;
+      const bcy = BOT_BOARD_Y + BOT_BOARD_H / 2;
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      ctx.fillRect(BOT_BOARD_X, BOT_BOARD_Y, BOT_BOARD_W, BOT_BOARD_H);
+      ctx.fillStyle = '#66ffaa';
+      ctx.font = 'bold 20px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText('BOT WINS', bcx, bcy);
+    }
+  }
 }

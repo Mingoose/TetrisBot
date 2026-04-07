@@ -1,4 +1,4 @@
-import { GameState, GameVariant, ActivePiece, PieceType, CellValue } from './types';
+import { GameState, GameVariant, ActivePiece, PieceType, CellValue, Snapshot } from './types';
 import { Settings } from './settings';
 import {
   emptyBoard,
@@ -31,6 +31,12 @@ export type LockHook = (
 
 let lockHook: LockHook | null = null;
 export function setLockHook(fn: LockHook | null): void { lockHook = fn; }
+
+// Hook called at the START of lockAndSpawn (before mutation) for replay recording.
+// Receives the pre-lock snapshot (already deep-cloned by pushHistory) and elapsed ms.
+export type PreLockCallback = (snapshot: Snapshot, elapsedMs: number) => void;
+let preLockCallback: PreLockCallback | null = null;
+export function setPreLockCallback(fn: PreLockCallback | null): void { preLockCallback = fn; }
 const LOCK_DELAY_MS = 500;
 const LOCK_RESET_MAX = 15;
 const SOFT_DROP_FACTOR = 10;
@@ -123,6 +129,14 @@ function handleDasArr(
 function lockAndSpawn(state: GameState): void {
   // Snapshot BEFORE mutating board
   pushHistory(state);
+
+  // Fire replay callback with the just-pushed snapshot (already a deep clone).
+  if (preLockCallback && (state.variant === 'sprint' || state.variant === 'versus') && state.sprintStartTime > 0) {
+    preLockCallback(
+      state.history[state.history.length - 1],
+      state.lastFrameTime - state.sprintStartTime,
+    );
+  }
 
   // Capture for lock hook (T-spin detection needs pre-lock board + piece position)
   const landedPiece = { ...state.active };
@@ -291,7 +305,7 @@ export function processFrame(
     state.countdownMs -= dt;
     if (state.countdownMs <= 0) {
       state.mode = 'playing';
-      if (state.variant === 'sprint') state.sprintStartTime = timestamp;
+      if (state.variant === 'sprint' || state.variant === 'versus') state.sprintStartTime = timestamp;
     }
     return;
   }

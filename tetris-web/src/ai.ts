@@ -864,6 +864,9 @@ function expandBeamNodeHardHard(node: BeamNodeHard, pendingGarbage: number): Bea
             x: placement.x,
             y: placement.y,
             useHold: opt.useHold,
+            linesCleared,
+            isTSpin: placement.isTSpin,
+            isPerfectClear,
           } satisfies EngineMove]
         : null;
 

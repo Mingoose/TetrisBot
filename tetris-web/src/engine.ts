@@ -7,6 +7,9 @@ export interface EngineMove {
   x: number;
   y: number;
   useHold: boolean;
+  linesCleared: number;
+  isTSpin: boolean;
+  isPerfectClear: boolean;
 }
 
 /**

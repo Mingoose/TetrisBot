@@ -17,6 +17,11 @@ import { VersusData, BotVsBotData, BotBoard, initVersusData, initBotVsBotData, a
 import { drawEngineOverlay } from './engineOverlay';
 import { gameStateToEngineRequest } from './engine';
 import type { EngineAnalysis } from './engine';
+import { lockPiece, clearLines } from './board';
+import type { CellValue } from './types';
+import { setPreLockCallback } from './game';
+import type { SprintReplay, ReplayEntry, VersusReplay, VersusReplayEntry, BotSnapshot } from './replay';
+import { drawReplayScreen, drawVersusReplayScreen } from './renderer';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 canvas.width = VERSUS_CANVAS_W;
@@ -104,6 +109,28 @@ let engineMode = false;
 let engineAnalysis: EngineAnalysis | null = null;
 let engineSelectedLine = 0;
 let engineWorker: Worker | null = null;
+let engineBoardStates: CellValue[][][] = [];
+let engineAnimFrame = 0;
+let engineAnimLastAdvance = 0;
+const ENGINE_ANIM_MS = 700;
+
+function computeEngineBoardStates(
+  board: CellValue[][],
+  analysis: EngineAnalysis,
+  sel: number,
+): CellValue[][][] {
+  const line = analysis.lines[Math.min(sel, analysis.lines.length - 1)];
+  if (!line || line.moves.length === 0) return [board];
+  const states: CellValue[][][] = [board];
+  let cur = board;
+  for (const mv of line.moves) {
+    const locked = lockPiece(cur, { type: mv.pieceType, rotationIndex: mv.rotationIndex, x: mv.x, y: mv.y });
+    const { board: cleared } = clearLines(locked);
+    states.push(cleared);
+    cur = cleared;
+  }
+  return states;
+}
 
 function startEngineMode(): void {
   engineMode = true;
@@ -117,6 +144,9 @@ function startEngineMode(): void {
       if (e.data?.type === 'analysis') {
         engineAnalysis = e.data.result as EngineAnalysis;
         engineSelectedLine = 0;
+        engineAnimFrame = 0;
+        engineAnimLastAdvance = 0;
+        engineBoardStates = computeEngineBoardStates(state.board, engineAnalysis, 0);
       }
     };
   }
@@ -129,6 +159,88 @@ function stopEngineMode(): void {
   engineMode = false;
   engineAnalysis = null;
   engineSelectedLine = 0;
+  engineBoardStates = [];
+  engineAnimFrame = 0;
+  engineAnimLastAdvance = 0;
+}
+
+// ---- Sprint replay state ----
+let latestSprintReplay: SprintReplay | null = null;
+let recordingEntries: ReplayEntry[] = [];
+let replayMode = false;
+let replayPaused = false;
+let replayElapsedMs = 0;
+
+function startSprintRecording(): void {
+  recordingEntries = [];
+  setPreLockCallback((snapshot, elapsedMs) => {
+    recordingEntries.push({ snapshot, elapsedMs });
+  });
+}
+
+function finishSprintRecording(finalBoard: CellValue[][], finalElapsedMs: number): void {
+  latestSprintReplay = {
+    entries: recordingEntries,
+    finalElapsedMs,
+    finalBoard: structuredClone(finalBoard),
+  };
+}
+
+// ---- Versus replay state ----
+let latestVersusReplay: VersusReplay | null = null;
+let versusRecordingEntries: VersusReplayEntry[] = [];
+let versusReplayMode = false;
+let versusReplayPaused = false;
+let versusReplayElapsedMs = 0;
+
+function snapshotFromBot(bot: import('./versus').BotBoard): BotSnapshot {
+  return {
+    board: structuredClone(bot.board),
+    active: { ...bot.active },
+    nextQueue: [...bot.nextQueue],
+    hold: bot.hold,
+    holdUsed: bot.holdUsed,
+    lines: bot.lines,
+    dead: bot.dead,
+  };
+}
+
+function snapshotFromState(s: import('./types').GameState): import('./types').Snapshot {
+  return {
+    board: structuredClone(s.board),
+    score: s.score,
+    lines: s.lines,
+    level: s.level,
+    nextQueue: [...s.nextQueue],
+    hold: s.hold,
+    holdUsed: s.holdUsed,
+    active: { ...s.active },
+    bagState: [...s.bagState],
+  };
+}
+
+function startVersusRecording(): void {
+  versusRecordingEntries = [];
+  setPreLockCallback((snapshot, elapsedMs) => {
+    if (versusData) {
+      versusRecordingEntries.push({ elapsedMs, playerSnapshot: snapshot, botSnapshot: snapshotFromBot(versusData.bot) });
+    }
+  });
+}
+
+function finishVersusRecording(
+  winner: 'player' | 'bot',
+  finalElapsedMs: number,
+  finalPlayerBoard: CellValue[][],
+  finalBotBoard: CellValue[][],
+): void {
+  latestVersusReplay = {
+    entries: [...versusRecordingEntries],
+    finalElapsedMs,
+    winner,
+    finalPlayerBoard: structuredClone(finalPlayerBoard),
+    finalBotBoard: structuredClone(finalBotBoard),
+  };
 }
 
 // ---- Bot vs Bot state ----
@@ -455,6 +567,7 @@ canvas.addEventListener('click', (e) => {
     setupAiForGame();
     wireWorker(getAiWorker());
     requestMoveWithTimeout(versusData.bot, 0);
+    startVersusRecording();
     return;
   }
 
@@ -482,7 +595,9 @@ canvas.addEventListener('click', (e) => {
 
   restartState(variant);
 
-  if (variant === 'watch') {
+  if (variant === 'sprint') {
+    startSprintRecording();
+  } else if (variant === 'watch') {
     customAiError = null;
     customAiWarning = null;
     versusData = initVersusData();
@@ -560,6 +675,38 @@ async function startGame(userId: string): Promise<void> {
       engineWorker = null;
     }
 
+    // ---- REPLAY MODE (sprint) ----
+    if (replayMode && latestSprintReplay) {
+      if (wasJustPressed(input, 'Space')) replayPaused = !replayPaused;
+      if (wasJustPressed(input, 'KeyR')) { replayElapsedMs = 0; replayPaused = false; }
+      if (wasJustPressed(input, 'Escape')) replayMode = false;
+
+      if (!replayPaused) {
+        replayElapsedMs = Math.min(replayElapsedMs + dt, latestSprintReplay.finalElapsedMs);
+      }
+
+      drawReplayScreen(ctx, latestSprintReplay, replayElapsedMs, replayPaused);
+      flushInput(input);
+      state.rafHandle = requestAnimationFrame(gameLoop);
+      return;
+    }
+
+    // ---- REPLAY MODE (versus) ----
+    if (versusReplayMode && latestVersusReplay) {
+      if (wasJustPressed(input, 'Space')) versusReplayPaused = !versusReplayPaused;
+      if (wasJustPressed(input, 'KeyR')) { versusReplayElapsedMs = 0; versusReplayPaused = false; }
+      if (wasJustPressed(input, 'Escape')) versusReplayMode = false;
+
+      if (!versusReplayPaused) {
+        versusReplayElapsedMs = Math.min(versusReplayElapsedMs + dt, latestVersusReplay.finalElapsedMs);
+      }
+
+      drawVersusReplayScreen(ctx, latestVersusReplay, versusReplayElapsedMs, versusReplayPaused);
+      flushInput(input);
+      state.rafHandle = requestAnimationFrame(gameLoop);
+      return;
+    }
+
     // Watch / bot-vs-bot: handle input directly (no player game to advance)
     if ((state.variant === 'watch' || state.variant === 'botvsbot') && state.mode !== 'menu') {
       if (wasJustPressed(input, settings.keybindings.pause) || wasJustPressed(input, 'Escape')) {
@@ -582,8 +729,34 @@ async function startGame(userId: string): Promise<void> {
       // Detect versus restart (game.ts does Object.assign(state, initGameState('versus'))
       // which resets lastFrameTime to 0; processFrame sets it on next call)
       const wasLastFrameTime = state.lastFrameTime;
+      const wasSprintGameover  = state.variant === 'sprint'  && state.mode === 'gameover';
+      const wasVersusGameover  = state.variant === 'versus'  && state.mode === 'gameover';
+
+      // "W" key on sprint complete screen → enter sprint replay
+      if (wasSprintGameover && latestSprintReplay && wasJustPressed(input, 'KeyW')) {
+        replayMode = true;
+        replayElapsedMs = 0;
+        replayPaused = false;
+      }
+
+      // "W" key on versus result screen → enter versus replay
+      if (wasVersusGameover && latestVersusReplay && wasJustPressed(input, 'KeyW')) {
+        versusReplayMode = true;
+        versusReplayElapsedMs = 0;
+        versusReplayPaused = false;
+      }
 
       processFrame(state, input, timestamp, settings);
+
+      // Sprint gameover just happened — finalize replay
+      if (state.variant === 'sprint' && !wasSprintGameover && state.mode === 'gameover') {
+        finishSprintRecording(state.board, state.sprintElapsedMs);
+      }
+
+      // Sprint restart via R key (lastFrameTime resets to 0)
+      if (state.variant === 'sprint' && wasLastFrameTime !== 0 && state.lastFrameTime === 0) {
+        startSprintRecording();
+      }
 
       if (versusData !== null && state.variant === 'versus') {
         // Restart detected: reinit bot and re-register hook
@@ -593,21 +766,26 @@ async function startGame(userId: string): Promise<void> {
           setupAiForGame();
           wireWorker(getAiWorker());
           requestMoveWithTimeout(versusData.bot, 0);
+          startVersusRecording();
         }
 
         // Determine winner
         if (versusData.winner === null) {
           const playerDead = state.mode === 'gameover';
           const botDead = versusData.bot.dead;
+          const elapsed = state.sprintStartTime > 0 ? timestamp - state.sprintStartTime : 0;
           if (botDead && !playerDead) {
             versusData.winner = 'player';
             state.mode = 'gameover';
+            finishVersusRecording('player', elapsed, state.board, versusData.bot.board);
           } else if (playerDead && !botDead) {
             versusData.winner = 'bot';
             versusData.bot.dead = true;
+            finishVersusRecording('bot', elapsed, state.board, versusData.bot.board);
           } else if (playerDead && botDead) {
             // Both died on the same frame — player wins (their clear triggered the kill)
             versusData.winner = 'player';
+            finishVersusRecording('player', elapsed, state.board, versusData.bot.board);
           }
         }
       }
@@ -624,9 +802,15 @@ async function startGame(userId: string): Promise<void> {
           const lineCount = engineAnalysis.lines.length;
           if (wasJustPressed(input, 'ArrowDown')) {
             engineSelectedLine = (engineSelectedLine + 1) % lineCount;
+            engineAnimFrame = 0;
+            engineAnimLastAdvance = 0;
+            engineBoardStates = computeEngineBoardStates(state.board, engineAnalysis, engineSelectedLine);
           }
           if (wasJustPressed(input, 'ArrowUp')) {
             engineSelectedLine = (engineSelectedLine - 1 + lineCount) % lineCount;
+            engineAnimFrame = 0;
+            engineAnimLastAdvance = 0;
+            engineBoardStates = computeEngineBoardStates(state.board, engineAnalysis, engineSelectedLine);
           }
         }
       }
@@ -652,6 +836,14 @@ async function startGame(userId: string): Promise<void> {
             customAiError = watchResult === 'floating'
               ? `Floating piece: position (x:${move.x}, y:${move.y}, rot:${move.rotationIndex}) is not the lowest valid row — hard drop used instead`
               : `Invalid position (x:${move.x}, y:${move.y}, rot:${move.rotationIndex}) was occupied — hard drop used instead`;
+          }
+          // Record bot lock for versus replay
+          if (state.variant === 'versus' && state.sprintStartTime > 0) {
+            versusRecordingEntries.push({
+              elapsedMs: timestamp - state.sprintStartTime,
+              playerSnapshot: snapshotFromState(state),
+              botSnapshot: snapshotFromBot(versusData.bot),
+            });
           }
           if (!versusData.bot.dead) {
             requestMoveWithTimeout(versusData.bot, versusData.botCombat.pendingGarbage);
@@ -719,9 +911,18 @@ async function startGame(userId: string): Promise<void> {
       ? (customAiName ?? AI_DIFFICULTY_PARAMS[versusDifficulty].label)
       : managerBotName;
     const bot2Name = AI_DIFFICULTY_PARAMS[bvbDifficulty].label;
-    draw(ctx, state, versusData, customAiName, botVsBotData, isAdmin, customAiError, customAiWarning, versusDifficultyPending || bvbDifficultyPending, bot1Name, bot2Name);
+    draw(ctx, state, versusData, customAiName, botVsBotData, isAdmin, customAiError, customAiWarning, versusDifficultyPending || bvbDifficultyPending, bot1Name, bot2Name, settings.keybindings);
     if (engineMode && state.mode === 'paused' && state.variant === 'creative') {
-      drawEngineOverlay(ctx, engineAnalysis, engineSelectedLine, state.board);
+      if (engineAnalysis && engineBoardStates.length > 1) {
+        const moveCount = engineBoardStates.length - 1;
+        if (engineAnimLastAdvance === 0) {
+          engineAnimLastAdvance = timestamp;
+        } else if (timestamp - engineAnimLastAdvance >= ENGINE_ANIM_MS) {
+          engineAnimFrame = (engineAnimFrame + 1) % moveCount;
+          engineAnimLastAdvance = timestamp;
+        }
+      }
+      drawEngineOverlay(ctx, engineAnalysis, engineSelectedLine, engineBoardStates, engineAnimFrame, timestamp);
     }
     flushInput(input);
     state.rafHandle = requestAnimationFrame(gameLoop);
