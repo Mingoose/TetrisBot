@@ -9,9 +9,10 @@ import {
   scoreForLines,
   gravityInterval,
   hardDropY,
+  attemptRotation,
   BOARD_COLS,
 } from './board';
-import { getRotation, getWallKicks } from './pieces';
+import { getRotation } from './pieces';
 import { Bag } from './bag';
 import { pushHistory, rewind } from './rewind';
 import { InputState, wasJustPressed, isHeld } from './input';
@@ -37,8 +38,17 @@ export function setLockHook(fn: LockHook | null): void { lockHook = fn; }
 export type PreLockCallback = (snapshot: Snapshot, elapsedMs: number) => void;
 let preLockCallback: PreLockCallback | null = null;
 export function setPreLockCallback(fn: PreLockCallback | null): void { preLockCallback = fn; }
-const LOCK_DELAY_MS = 500;
+export const LOCK_DELAY_MS = 500;
+const COUNTDOWN_MS = 1500;
 const LOCK_RESET_MAX = 15;
+
+// Reset the three transient fields that must be cleared whenever a new piece spawns
+// or the game state is restored from a snapshot.
+export function resetTransientState(state: GameState): void {
+  state.lockDelayMs = LOCK_DELAY_MS;
+  state.lockResetCount = 0;
+  state.gravityAccumMs = 0;
+}
 const SOFT_DROP_FACTOR = 10;
 
 // Module-level bag (lives outside GameState so it isn't cloned into snapshots directly,
@@ -71,7 +81,7 @@ export function initGameState(variant: GameVariant): GameState {
     gravityAccumMs: 0,
     lastFrameTime: 0,
     rafHandle: 0,
-    countdownMs: (variant === 'sprint' || variant === 'versus') ? 1500 : 0,
+    countdownMs: (variant === 'sprint' || variant === 'versus') ? COUNTDOWN_MS : 0,
     sprintStartTime: 0,
     sprintElapsedMs: 0,
     lastActionRotation: false,
@@ -174,9 +184,7 @@ function lockAndSpawn(state: GameState): void {
 
   state.active = spawnPiece(nextType);
   state.holdUsed = false;
-  state.lockDelayMs = LOCK_DELAY_MS;
-  state.lockResetCount = 0;
-  state.gravityAccumMs = 0;
+  resetTransientState(state);
 
   // Immediate game-over: new piece spawns into filled cells
   if (collides(state.board, state.active, 0, 0)) {
@@ -191,27 +199,11 @@ function tryMove(state: GameState, dx: number, dy: number): boolean {
 }
 
 function tryRotate(state: GameState, delta: number): boolean {
-  const newIndex = ((state.active.rotationIndex + delta) % 4 + 4) % 4;
-  // CW: use kicks from the current (from) state index.
-  // CCW: use kicks from the new (to) state index, negated — this is the reverse of that transition.
-  const kickIndex = delta > 0 ? state.active.rotationIndex : newIndex;
-  const kicks = getWallKicks(state.active.type, kickIndex);
-  const kickList = delta < 0 ? kicks.map(([dx, dy]) => [-dx, -dy] as [number, number]) : kicks;
-
-  for (const [kdx, kdy] of kickList) {
-    const candidate: ActivePiece = {
-      ...state.active,
-      rotationIndex: newIndex,
-      x: state.active.x + kdx,
-      y: state.active.y + kdy,
-    };
-    if (!collides(state.board, candidate, 0, 0)) {
-      state.active = candidate;
-      state.lastActionRotation = true;
-      return true;
-    }
-  }
-  return false;
+  const rotated = attemptRotation(state.board, state.active, delta);
+  if (!rotated) return false;
+  state.active = rotated;
+  state.lastActionRotation = true;
+  return true;
 }
 
 function tryHold(state: GameState): void {
@@ -227,9 +219,7 @@ function tryHold(state: GameState): void {
   state.hold = state.active.type;
   state.holdUsed = true;
   state.active = spawnPiece(incoming);
-  state.lockDelayMs = LOCK_DELAY_MS;
-  state.lockResetCount = 0;
-  state.gravityAccumMs = 0;
+  resetTransientState(state);
   state.lastActionRotation = false;
 }
 
@@ -349,9 +339,7 @@ export function processFrame(
     const ghostY = hardDropY(state.board, state.active);
     if (ghostY !== state.active.y) {
       state.active = { ...state.active, y: ghostY };
-      state.gravityAccumMs = 0;
-      state.lockDelayMs = LOCK_DELAY_MS;
-      state.lockResetCount = 0;
+      resetTransientState(state);
     }
   }
 

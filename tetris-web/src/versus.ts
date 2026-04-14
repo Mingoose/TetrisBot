@@ -28,9 +28,6 @@ export interface BotBoard {
   pieceIndex: number;
   lines: number;
   dead: boolean;
-  // Combat state mirrored here so the AI worker receives it with each move request.
-  combo: number;      // -1 = no streak; mirrors CombatState.combo
-  b2bActive: boolean; // mirrors CombatState.b2bActive
 }
 
 export interface BotVsBotData {
@@ -78,22 +75,23 @@ function getBvbPiece(index: number): PieceType {
 // Beam search depth 4 × worst-case 2 draws/level = 8, plus slack.
 const WORKER_LOOKAHEAD = 30;
 
-function initBotBoard(): BotBoard {
-  botBag = new Bag();
-  const all = botBag.peek(NEXT_QUEUE_SIZE + 1);
-  for (let i = 0; i < NEXT_QUEUE_SIZE + 1; i++) botBag.next();
+// Shared BotBoard factory — all initialization paths use this.
+function makeBotBoard(
+  activeType: PieceType,
+  nextQueue: PieceType[],
+  bagState: PieceType[],
+  pieceIndex: number = -1,
+): BotBoard {
   return {
     board: emptyBoard(),
-    active: spawnPiece(all[0]),
-    nextQueue: all.slice(1),
+    active: spawnPiece(activeType),
+    nextQueue: [...nextQueue],
     hold: null,
     holdUsed: false,
-    bagState: botBag.getState(),
-    pieceIndex: -1,
+    bagState: [...bagState],
+    pieceIndex,
     lines: 0,
     dead: false,
-    combo: -1,
-    b2bActive: false,
   };
 }
 
@@ -105,21 +103,12 @@ function makeCombat(): CombatState {
 export function initVersusData(playerSnapshot?: Pick<import('./types').Snapshot, 'active' | 'nextQueue' | 'bagState'>): VersusData {
   let bot: BotBoard;
   if (playerSnapshot) {
-    bot = {
-      board: emptyBoard(),
-      active: spawnPiece(playerSnapshot.active.type),
-      nextQueue: [...playerSnapshot.nextQueue],
-      hold: null,
-      holdUsed: false,
-      bagState: [...playerSnapshot.bagState],
-      pieceIndex: -1,
-      lines: 0,
-      dead: false,
-      combo: -1,
-      b2bActive: false,
-    };
+    bot = makeBotBoard(playerSnapshot.active.type, playerSnapshot.nextQueue, playerSnapshot.bagState);
   } else {
-    bot = initBotBoard();
+    botBag = new Bag();
+    const all = botBag.peek(NEXT_QUEUE_SIZE + 1);
+    for (let i = 0; i < NEXT_QUEUE_SIZE + 1; i++) botBag.next();
+    bot = makeBotBoard(all[0], all.slice(1), botBag.getState());
   }
   return {
     playerCombat: makeCombat(),
@@ -138,23 +127,11 @@ export function initBotVsBotData(): BotVsBotData {
   for (let i = 0; i <= NEXT_QUEUE_SIZE; i++) getBvbPiece(i);
   const startIndex = NEXT_QUEUE_SIZE + 1; // index of next piece to draw on first lock
 
-  const makeBot = (): BotBoard => ({
-    board: emptyBoard(),
-    active: spawnPiece(bvbSeq[0]),
-    nextQueue: [...bvbSeq.slice(1, NEXT_QUEUE_SIZE + 1)],
-    hold: null,
-    holdUsed: false,
-    bagState: [],    // unused in pieceIndex mode
-    pieceIndex: startIndex,
-    lines: 0,
-    dead: false,
-    combo: -1,
-    b2bActive: false,
-  });
-
   return {
-    bot1: makeBot(), bot1Combat: makeCombat(),
-    bot2: makeBot(), bot2Combat: makeCombat(),
+    bot1: makeBotBoard(bvbSeq[0], bvbSeq.slice(1, NEXT_QUEUE_SIZE + 1), [], startIndex),
+    bot1Combat: makeCombat(),
+    bot2: makeBotBoard(bvbSeq[0], bvbSeq.slice(1, NEXT_QUEUE_SIZE + 1), [], startIndex),
+    bot2Combat: makeCombat(),
     bot1ThinkAccumMs: 0,
     bot2ThinkAccumMs: 0,
     winner: null,
@@ -165,7 +142,8 @@ export function initBotVsBotData(): BotVsBotData {
 
 // ---- Garbage math ----
 
-function computeGarbage(
+// comboIndex: -1 means no streak; 0+ is the consecutive-clear index after incrementing.
+export function computeGarbage(
   linesCleared: number,
   isTSpin: boolean,
   b2bActive: boolean,
@@ -180,7 +158,7 @@ function computeGarbage(
   }
   const qualifying = isTSpin || linesCleared === 4;
   if (qualifying && b2bActive) base++;
-  base += COMBO_TABLE[Math.min(comboIndex, COMBO_TABLE.length - 1)];
+  if (comboIndex >= 0) base += COMBO_TABLE[Math.min(comboIndex, COMBO_TABLE.length - 1)];
   return base;
 }
 
@@ -238,20 +216,23 @@ export function setupPlayerLockHook(data: VersusData): void {
 }
 
 // Send bot state to the AI worker for async move computation.
+// combat is spread into the message so the worker has current combo/b2b without
+// those fields living on BotBoard.
 export function requestBotMove(
   worker: Worker,
   bot: BotBoard,
-  pendingGarbage: number,
+  combat: CombatState,
   aiParams?: { beamWidth: number; searchDepth: number; advancedEval?: boolean },
 ): void {
+  const { pendingGarbage, combo, b2bActive } = combat;
   if (bot.pieceIndex >= 0) {
     // Extend shared sequence and pass a slice as bagState so the beam search
     // looks ahead into the same pieces both bots will actually receive.
     getBvbPiece(bot.pieceIndex + WORKER_LOOKAHEAD - 1);
     const bagState = bvbSeq.slice(bot.pieceIndex, bot.pieceIndex + WORKER_LOOKAHEAD);
-    worker.postMessage({ bot: { ...bot, bagState }, pendingGarbage, ...aiParams });
+    worker.postMessage({ bot: { ...bot, bagState }, pendingGarbage, combo, b2bActive, ...aiParams });
   } else {
-    worker.postMessage({ bot, pendingGarbage, ...aiParams });
+    worker.postMessage({ bot, pendingGarbage, combo, b2bActive, ...aiParams });
   }
 }
 
@@ -322,9 +303,6 @@ export function applyBotMove(
 
   // Garbage exchange
   bot.board = handleLock(botCombat, playerCombat, bot.board, linesCleared, isTSpin);
-  // Mirror combat state onto bot so the AI worker sees up-to-date combo/b2b on its next request.
-  bot.combo = botCombat.combo;
-  bot.b2bActive = botCombat.b2bActive;
 
   // Spawn next piece
   if (!useBvb) botBag.restoreState(bot.bagState);

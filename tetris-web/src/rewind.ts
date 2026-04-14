@@ -1,5 +1,8 @@
 import { GameState, Snapshot } from './types';
 
+// Must match LOCK_DELAY_MS in game.ts (not imported to avoid circular dependency).
+const LOCK_DELAY_MS = 500;
+
 export const MAX_HISTORY = 50;
 
 export function takeSnapshot(state: GameState): Snapshot {
@@ -36,7 +39,7 @@ export function rewind(state: GameState): void {
   state.active = snap.active;
   state.bagState = snap.bagState;
   // Reset transient timing (lastFrameTime = 0 forces processFrame to reinitialise dt)
-  state.lockDelayMs = 500;
+  state.lockDelayMs = LOCK_DELAY_MS;
   state.lockResetCount = 0;
   state.gravityAccumMs = 0;
   state.lastFrameTime = 0;

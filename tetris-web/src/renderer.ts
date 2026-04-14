@@ -1,6 +1,8 @@
 import { GameState, CellValue, PieceType, ActivePiece } from './types';
-import type { SprintReplay, VersusReplay } from './replay';
+import type { SprintReplay, VersusReplay, VersusReplayEntry } from './replay';
 import { getReplayFrameIndex, getVersusReplayFrameIndex } from './replay';
+import type { ClassificationResult } from './moveQuality';
+import { qualityColor, qualityLabel } from './moveQuality';
 import { PIECE_COLORS, getRotation } from './pieces';
 import { hardDropY, BOARD_COLS, BOARD_ROWS } from './board';
 import { CELL_SIZE, BOARD_OFFSET_X, BOARD_OFFSET_Y } from './editor';
@@ -15,8 +17,8 @@ const TEXT_COLOR = '#cccccc';
 const LABEL_COLOR = '#666688';
 
 // Derived layout constants
-const BOARD_W = BOARD_COLS * CELL_SIZE;
-const BOARD_H = BOARD_ROWS * CELL_SIZE;
+export const BOARD_W = BOARD_COLS * CELL_SIZE;
+export const BOARD_H = BOARD_ROWS * CELL_SIZE;
 const HOLD_X = 10;
 const HOLD_Y = BOARD_OFFSET_Y + 30;
 const NEXT_X = BOARD_OFFSET_X + BOARD_W + 10;
@@ -54,6 +56,10 @@ export const MENU_DIFF_HARD_BTN:   ButtonRect = { x: MENU_ROW1_START + 2 * (BTN_
 export const MENU_WATCH_BTN:  ButtonRect = { x: MENU_ROW2_START,                         y: MENU_ROW2_Y, w: BTN_W, h: BTN_H };
 export const MENU_BVB_BTN:    ButtonRect = { x: MENU_ROW2_START + BTN_W + BTN_GAP,       y: MENU_ROW2_Y, w: BTN_W, h: BTN_H };
 export const MENU_UPLOAD_BTN: ButtonRect = { x: MENU_ROW2_START + 2 * (BTN_W + BTN_GAP), y: MENU_ROW2_Y, w: BTN_W, h: BTN_H };
+
+// Game review: "SEE BEST MOVE / HIDE BEST MOVE" button — placed below classification badge
+// Classification badge starts at HOLD_Y+100+104=254, delta at +18=272; button at +36=290
+export const GAME_REVIEW_BTN: ButtonRect = { x: HOLD_X, y: HOLD_Y + 240, w: 110, h: 28 };
 
 // Bot-vs-bot layout: two boards side by side at BOT_CELL_SIZE
 const BVB_CELL = BOT_CELL_SIZE;
@@ -435,7 +441,7 @@ function drawSprintComplete(ctx: CanvasRenderingContext2D, state: GameState): vo
   ctx.fillText('R: play again   Esc: menu', cx, cy + 38);
   ctx.fillStyle = '#5555aa';
   ctx.font = '11px monospace';
-  ctx.fillText('W: watch replay', cx, cy + 56);
+  ctx.fillText('W: replay   G: game review   E: engine analysis', cx, cy + 56);
 }
 
 function drawMenuButton(
@@ -693,7 +699,7 @@ function drawVersusResult(ctx: CanvasRenderingContext2D, winner: 'player' | 'bot
   ctx.fillText('R: rematch   Esc: menu', cx, cy + 20);
   ctx.fillStyle = '#5555aa';
   ctx.font = '11px monospace';
-  ctx.fillText('W: watch replay', cx, cy + 40);
+  ctx.fillText('W: replay   G: game review   E: engine analysis', cx, cy + 40);
 
   // Overlay on bot board if bot won (to show player what happened)
   if (winner === 'bot') {
@@ -820,6 +826,9 @@ export function drawReplayScreen(
     ctx.fillStyle = LABEL_COLOR;
     ctx.font = '13px monospace';
     ctx.fillText('R: watch again   Esc: back', cx, cy + 38);
+    ctx.fillStyle = '#5555aa';
+    ctx.font = '11px monospace';
+    ctx.fillText('G: game review   E: engine analysis', cx, cy + 56);
   }
 }
 
@@ -945,6 +954,9 @@ export function drawVersusReplayScreen(
     ctx.fillStyle = TEXT_COLOR;
     ctx.font = '13px monospace';
     ctx.fillText('R: watch again   Esc: back', cx, cy + 20);
+    ctx.fillStyle = '#5555aa';
+    ctx.font = '11px monospace';
+    ctx.fillText('G: game review   E: engine analysis', cx, cy + 38);
 
     if (replay.winner === 'bot') {
       const bcx = BOT_BOARD_X + BOT_BOARD_W / 2;
@@ -957,4 +969,318 @@ export function drawVersusReplayScreen(
       ctx.fillText('BOT WINS', bcx, bcy);
     }
   }
+}
+
+// ---- Game review screens ----
+// These draw the board/panels from a replay snapshot. The caller (main.ts)
+// draws the engine overlay on top to show analysis for that position.
+
+/**
+ * Draw a sprint review frame. Shows the board state just before move `moveIdx`
+ * was played. The engine overlay should be drawn on top by the caller.
+ */
+export function drawReviewScreen(
+  ctx: CanvasRenderingContext2D,
+  replay: SprintReplay,
+  moveIdx: number,
+): void {
+  const entry = replay.entries[Math.min(moveIdx, replay.entries.length - 1)];
+  const snap  = entry.snapshot;
+
+  ctx.fillStyle = BG_COLOR;
+  ctx.fillRect(0, 0, VERSUS_CANVAS_W, CANVAS_H);
+
+  // Board — engine overlay will replace this once analysis arrives
+  ctx.fillStyle = '#0a0a1e';
+  ctx.fillRect(BOARD_OFFSET_X, BOARD_OFFSET_Y, BOARD_W, BOARD_H);
+  drawGrid(ctx, BOARD_OFFSET_X, BOARD_OFFSET_Y, BOARD_COLS, BOARD_ROWS, CELL_SIZE);
+  drawLockedCells(ctx, snap.board, BOARD_OFFSET_X, BOARD_OFFSET_Y, CELL_SIZE);
+
+  // Show the actual piece played at its landing position
+  const color = PIECE_COLORS[snap.active.type];
+  const rot   = getRotation(snap.active.type, snap.active.rotationIndex);
+  for (let r = 0; r < rot.length; r++) {
+    for (let c = 0; c < rot[r].length; c++) {
+      if (!rot[r][c]) continue;
+      const row = snap.active.y + r;
+      const col = snap.active.x + c;
+      if (row >= 0 && row < BOARD_ROWS && col >= 0 && col < BOARD_COLS)
+        drawCell(ctx, BOARD_OFFSET_X + col * CELL_SIZE, BOARD_OFFSET_Y + row * CELL_SIZE, CELL_SIZE, color);
+    }
+  }
+  drawBoardBorder(ctx, BOARD_OFFSET_X, BOARD_OFFSET_Y, BOARD_W, BOARD_H);
+
+  drawHoldBox(ctx, snap.hold, snap.holdUsed);
+  drawNextQueue(ctx, snap.nextQueue);
+
+  const x = HOLD_X;
+  const startY = HOLD_Y + 100;
+  drawHUDEntry(ctx, 'REVIEW', `${moveIdx + 1}/${replay.entries.length}`, x, startY);
+  drawHUDEntry(ctx, 'LINES', String(snap.lines), x, startY + 52);
+  drawHints(ctx, ['←→: step moves', '↑↓: cycle lines', 'Esc: back']);
+}
+
+/**
+ * Draw a versus review frame. Shows the player's board state just before move
+ * `moveIdx`. The engine overlay should be drawn on top by the caller.
+ */
+export function drawVersusReviewScreen(
+  ctx: CanvasRenderingContext2D,
+  replay: VersusReplay,
+  moveIdx: number,
+): void {
+  const entry     = replay.entries[Math.min(moveIdx, replay.entries.length - 1)];
+  const playerSnap = entry.playerSnapshot;
+  const botSnap    = entry.botSnapshot;
+
+  ctx.fillStyle = BG_COLOR;
+  ctx.fillRect(0, 0, VERSUS_CANVAS_W, CANVAS_H);
+
+  // ---- Player board ----
+  ctx.fillStyle = '#0a0a1e';
+  ctx.fillRect(BOARD_OFFSET_X, BOARD_OFFSET_Y, BOARD_W, BOARD_H);
+  drawGrid(ctx, BOARD_OFFSET_X, BOARD_OFFSET_Y, BOARD_COLS, BOARD_ROWS, CELL_SIZE);
+  drawLockedCells(ctx, playerSnap.board, BOARD_OFFSET_X, BOARD_OFFSET_Y, CELL_SIZE);
+
+  // Show the actual piece played at its landing position
+  const pColor = PIECE_COLORS[playerSnap.active.type];
+  const pRot   = getRotation(playerSnap.active.type, playerSnap.active.rotationIndex);
+  for (let r = 0; r < pRot.length; r++) {
+    for (let c = 0; c < pRot[r].length; c++) {
+      if (!pRot[r][c]) continue;
+      const row = playerSnap.active.y + r;
+      const col = playerSnap.active.x + c;
+      if (row >= 0 && row < BOARD_ROWS && col >= 0 && col < BOARD_COLS)
+        drawCell(ctx, BOARD_OFFSET_X + col * CELL_SIZE, BOARD_OFFSET_Y + row * CELL_SIZE, CELL_SIZE, pColor);
+    }
+  }
+  drawBoardBorder(ctx, BOARD_OFFSET_X, BOARD_OFFSET_Y, BOARD_W, BOARD_H);
+
+  drawHoldBox(ctx, playerSnap.hold, playerSnap.holdUsed);
+  drawNextQueue(ctx, playerSnap.nextQueue);
+
+  // ---- Bot board ----
+  ctx.fillStyle = '#888899';
+  ctx.font = '11px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('BOT', BOT_BOARD_X + BOT_BOARD_W / 2, BOT_BOARD_Y - 6);
+
+  ctx.fillStyle = '#0a0a1e';
+  ctx.fillRect(BOT_BOARD_X, BOT_BOARD_Y, BOT_BOARD_W, BOT_BOARD_H);
+  drawGrid(ctx, BOT_BOARD_X, BOT_BOARD_Y, BOARD_COLS, BOARD_ROWS, BOT_CELL_SIZE);
+  drawLockedCells(ctx, botSnap.board, BOT_BOARD_X, BOT_BOARD_Y, BOT_CELL_SIZE);
+
+  if (!botSnap.dead) {
+    const bColor = PIECE_COLORS[botSnap.active.type];
+    const bRot   = getRotation(botSnap.active.type, botSnap.active.rotationIndex);
+    for (let r = 0; r < bRot.length; r++) {
+      for (let c = 0; c < bRot[r].length; c++) {
+        if (!bRot[r][c]) continue;
+        const row = botSnap.active.y + r;
+        const col = botSnap.active.x + c;
+        if (row >= 0 && row < BOARD_ROWS && col >= 0 && col < BOARD_COLS)
+          drawCell(ctx, BOT_BOARD_X + col * BOT_CELL_SIZE, BOT_BOARD_Y + row * BOT_CELL_SIZE, BOT_CELL_SIZE, bColor);
+      }
+    }
+  }
+  drawBoardBorder(ctx, BOT_BOARD_X, BOT_BOARD_Y, BOT_BOARD_W, BOT_BOARD_H);
+
+  ctx.fillStyle = '#666688';
+  ctx.font = '11px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(`LINES  ${botSnap.lines}`, BOT_BOARD_X + BOT_BOARD_W / 2, BOT_BOARD_Y + BOT_BOARD_H + 14);
+
+  // ---- HUD ----
+  const x = HOLD_X;
+  const startY = HOLD_Y + 100;
+  drawHUDEntry(ctx, 'REVIEW', `${moveIdx + 1}/${replay.entries.length}`, x, startY);
+  drawHUDEntry(ctx, 'LINES', String(playerSnap.lines), x, startY + 52);
+  drawHints(ctx, ['←→: step moves', '↑↓: cycle lines', 'Esc: back']);
+}
+
+// ---- Game review screens (classification mode) ----
+
+function drawClassificationHUD(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  startY: number,
+  classification: ClassificationResult | null,
+  showBestMove: boolean,
+): void {
+  const badgeY = startY + 104;
+
+  if (!classification) {
+    ctx.fillStyle = '#444466';
+    ctx.font = '10px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText('analyzing...', x, badgeY);
+  } else {
+    // Quality label
+    ctx.fillStyle = qualityColor(classification.quality);
+    ctx.font = 'bold 16px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(qualityLabel(classification.quality).toUpperCase(), x, badgeY);
+
+    // Score delta
+    ctx.font = '10px monospace';
+    if (classification.delta !== null) {
+      ctx.fillStyle = '#666688';
+      ctx.fillText(`\u0394 ${classification.delta.toFixed(1)}`, x, badgeY + 18);
+    } else {
+      ctx.fillStyle = '#664444';
+      ctx.fillText('not in top 30', x, badgeY + 18);
+    }
+  }
+
+  // SEE BEST MOVE / HIDE BEST MOVE button
+  const btn = GAME_REVIEW_BTN;
+  ctx.fillStyle = showBestMove ? '#1a1a3a' : '#13132a';
+  ctx.fillRect(btn.x, btn.y, btn.w, btn.h);
+  ctx.strokeStyle = showBestMove ? '#5555aa' : '#3a3a66';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(btn.x + 0.5, btn.y + 0.5, btn.w - 1, btn.h - 1);
+  ctx.fillStyle = showBestMove ? '#8888cc' : '#5555aa';
+  ctx.font = 'bold 10px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(showBestMove ? 'HIDE BEST' : 'SEE BEST MOVE', btn.x + btn.w / 2, btn.y + btn.h / 2 + 4);
+}
+
+/**
+ * Draw a sprint game review frame — board from snapshot, classification HUD,
+ * and the SEE BEST MOVE button. Caller draws engine overlay on top when active.
+ */
+export function drawGameReviewScreen(
+  ctx: CanvasRenderingContext2D,
+  replay: SprintReplay,
+  moveIdx: number,
+  classification: ClassificationResult | null,
+  showBestMove: boolean,
+  timestamp: number,
+): void {
+  const entry = replay.entries[Math.min(moveIdx, replay.entries.length - 1)];
+  const snap  = entry.snapshot;
+
+  ctx.fillStyle = BG_COLOR;
+  ctx.fillRect(0, 0, VERSUS_CANVAS_W, CANVAS_H);
+
+  // Board — engine overlay replaces this when showBestMove is true
+  ctx.fillStyle = '#0a0a1e';
+  ctx.fillRect(BOARD_OFFSET_X, BOARD_OFFSET_Y, BOARD_W, BOARD_H);
+  drawGrid(ctx, BOARD_OFFSET_X, BOARD_OFFSET_Y, BOARD_COLS, BOARD_ROWS, CELL_SIZE);
+  drawLockedCells(ctx, snap.board, BOARD_OFFSET_X, BOARD_OFFSET_Y, CELL_SIZE);
+
+  // Pulse the placed piece to make it clearly identifiable
+  const pieceAlpha = 0.75 + 0.25 * Math.sin(timestamp / 200);
+  const color = PIECE_COLORS[snap.active.type];
+  const rot   = getRotation(snap.active.type, snap.active.rotationIndex);
+  for (let r = 0; r < rot.length; r++) {
+    for (let c = 0; c < rot[r].length; c++) {
+      if (!rot[r][c]) continue;
+      const row = snap.active.y + r;
+      const col = snap.active.x + c;
+      if (row >= 0 && row < BOARD_ROWS && col >= 0 && col < BOARD_COLS)
+        drawCell(ctx, BOARD_OFFSET_X + col * CELL_SIZE, BOARD_OFFSET_Y + row * CELL_SIZE, CELL_SIZE, color, pieceAlpha);
+    }
+  }
+  drawBoardBorder(ctx, BOARD_OFFSET_X, BOARD_OFFSET_Y, BOARD_W, BOARD_H);
+
+  drawHoldBox(ctx, snap.hold, snap.holdUsed);
+  drawNextQueue(ctx, snap.nextQueue);
+
+  const x = HOLD_X;
+  const startY = HOLD_Y + 100;
+  drawHUDEntry(ctx, 'REVIEW', `${moveIdx + 1}/${replay.entries.length}`, x, startY);
+  drawHUDEntry(ctx, 'LINES', String(snap.lines), x, startY + 52);
+  drawClassificationHUD(ctx, x, startY, classification, showBestMove);
+
+  const hints = ['←→: step moves', showBestMove ? 'B: hide best move' : 'B: see best move', 'Esc: back'];
+  if (showBestMove) hints.splice(2, 0, '↑↓: cycle lines');
+  drawHints(ctx, hints);
+}
+
+/**
+ * Draw a versus game review frame — player board + bot board, classification HUD,
+ * and the SEE BEST MOVE button. Caller draws engine overlay on top when active.
+ * `entries` should be the player-lock-only filtered subset of the replay.
+ */
+export function drawVersusGameReviewScreen(
+  ctx: CanvasRenderingContext2D,
+  entries: VersusReplayEntry[],
+  moveIdx: number,
+  classification: ClassificationResult | null,
+  showBestMove: boolean,
+  timestamp: number,
+): void {
+  const entry      = entries[Math.min(moveIdx, entries.length - 1)];
+  const playerSnap = entry.playerSnapshot;
+  const botSnap    = entry.botSnapshot;
+
+  ctx.fillStyle = BG_COLOR;
+  ctx.fillRect(0, 0, VERSUS_CANVAS_W, CANVAS_H);
+
+  // ---- Player board ----
+  ctx.fillStyle = '#0a0a1e';
+  ctx.fillRect(BOARD_OFFSET_X, BOARD_OFFSET_Y, BOARD_W, BOARD_H);
+  drawGrid(ctx, BOARD_OFFSET_X, BOARD_OFFSET_Y, BOARD_COLS, BOARD_ROWS, CELL_SIZE);
+  drawLockedCells(ctx, playerSnap.board, BOARD_OFFSET_X, BOARD_OFFSET_Y, CELL_SIZE);
+
+  // Pulse the placed piece to make it clearly identifiable
+  const pieceAlpha = 0.75 + 0.25 * Math.sin(timestamp / 200);
+  const pColor = PIECE_COLORS[playerSnap.active.type];
+  const pRot   = getRotation(playerSnap.active.type, playerSnap.active.rotationIndex);
+  for (let r = 0; r < pRot.length; r++) {
+    for (let c = 0; c < pRot[r].length; c++) {
+      if (!pRot[r][c]) continue;
+      const row = playerSnap.active.y + r;
+      const col = playerSnap.active.x + c;
+      if (row >= 0 && row < BOARD_ROWS && col >= 0 && col < BOARD_COLS)
+        drawCell(ctx, BOARD_OFFSET_X + col * CELL_SIZE, BOARD_OFFSET_Y + row * CELL_SIZE, CELL_SIZE, pColor, pieceAlpha);
+    }
+  }
+  drawBoardBorder(ctx, BOARD_OFFSET_X, BOARD_OFFSET_Y, BOARD_W, BOARD_H);
+
+  drawHoldBox(ctx, playerSnap.hold, playerSnap.holdUsed);
+  drawNextQueue(ctx, playerSnap.nextQueue);
+
+  // ---- Bot board ----
+  ctx.fillStyle = '#888899';
+  ctx.font = '11px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('BOT', BOT_BOARD_X + BOT_BOARD_W / 2, BOT_BOARD_Y - 6);
+
+  ctx.fillStyle = '#0a0a1e';
+  ctx.fillRect(BOT_BOARD_X, BOT_BOARD_Y, BOT_BOARD_W, BOT_BOARD_H);
+  drawGrid(ctx, BOT_BOARD_X, BOT_BOARD_Y, BOARD_COLS, BOARD_ROWS, BOT_CELL_SIZE);
+  drawLockedCells(ctx, botSnap.board, BOT_BOARD_X, BOT_BOARD_Y, BOT_CELL_SIZE);
+
+  if (!botSnap.dead) {
+    const bColor = PIECE_COLORS[botSnap.active.type];
+    const bRot   = getRotation(botSnap.active.type, botSnap.active.rotationIndex);
+    for (let r = 0; r < bRot.length; r++) {
+      for (let c = 0; c < bRot[r].length; c++) {
+        if (!bRot[r][c]) continue;
+        const row = botSnap.active.y + r;
+        const col = botSnap.active.x + c;
+        if (row >= 0 && row < BOARD_ROWS && col >= 0 && col < BOARD_COLS)
+          drawCell(ctx, BOT_BOARD_X + col * BOT_CELL_SIZE, BOT_BOARD_Y + row * BOT_CELL_SIZE, BOT_CELL_SIZE, bColor);
+      }
+    }
+  }
+  drawBoardBorder(ctx, BOT_BOARD_X, BOT_BOARD_Y, BOT_BOARD_W, BOT_BOARD_H);
+
+  ctx.fillStyle = '#666688';
+  ctx.font = '11px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(`LINES  ${botSnap.lines}`, BOT_BOARD_X + BOT_BOARD_W / 2, BOT_BOARD_Y + BOT_BOARD_H + 14);
+
+  // ---- HUD ----
+  const x = HOLD_X;
+  const startY = HOLD_Y + 100;
+  drawHUDEntry(ctx, 'REVIEW', `${moveIdx + 1}/${entries.length}`, x, startY);
+  drawHUDEntry(ctx, 'LINES', String(playerSnap.lines), x, startY + 52);
+  drawClassificationHUD(ctx, x, startY, classification, showBestMove);
+
+  const hints = ['←→: step moves', 'Esc: back'];
+  if (showBestMove) hints.splice(1, 0, '↑↓: cycle lines');
+  drawHints(ctx, hints);
 }

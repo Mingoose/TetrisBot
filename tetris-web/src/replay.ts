@@ -50,6 +50,9 @@ export interface VersusReplayEntry {
   elapsedMs: number;
   playerSnapshot: Snapshot;
   botSnapshot: BotSnapshot;
+  /** True when this entry was recorded at a player piece lock (snapshot.active is at landing position).
+   *  False for bot-move entries where the player's piece is mid-flight. */
+  isPlayerLock: boolean;
 }
 
 /** A complete versus replay. */

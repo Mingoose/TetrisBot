@@ -1,12 +1,13 @@
 import { ActivePiece, CellValue, PieceType } from './types';
 import type { EngineMove, EngineRequest, EngineAnalysis } from './engine';
 import {
-  collides, lockAndClear, hardDropY,
+  collides, lockAndClear, hardDropY, attemptRotation,
   BOARD_COLS, BOARD_ROWS, countTSpinCorners,
 } from './board';
-import { getRotation, getWallKicks } from './pieces';
+import { getRotation } from './pieces';
 import { Bag } from './bag';
 import type { BotBoard } from './versus';
+import { computeGarbage } from './versus';
 
 const BEAM_WIDTH = 20;
 const SEARCH_DEPTH = 4;
@@ -29,29 +30,6 @@ interface PlacementResult {
   x: number;
   y: number;
   isTSpin: boolean;
-}
-
-// Apply a rotation (delta = +1 CW, -1 CCW, +2 180°) with SRS wall kicks,
-// matching the same logic as game.ts's tryRotate.
-function applyRotation(board: CellValue[][], piece: ActivePiece, delta: number): ActivePiece | null {
-  const newIndex = ((piece.rotationIndex + delta) % 4 + 4) % 4;
-  // CW / 180°: use kicks from the 'from' state. CCW: use negated kicks from the 'to' state.
-  const kickIndex = delta > 0 ? piece.rotationIndex : newIndex;
-  const kicks = getWallKicks(piece.type, kickIndex);
-  const kickList: Array<[number, number]> = delta < 0
-    ? kicks.map(([dx, dy]) => [-dx, -dy] as [number, number])
-    : kicks;
-
-  for (const [kdx, kdy] of kickList) {
-    const candidate: ActivePiece = {
-      ...piece,
-      rotationIndex: newIndex,
-      x: piece.x + kdx,
-      y: piece.y + kdy,
-    };
-    if (!collides(board, candidate, 0, 0)) return candidate;
-  }
-  return null;
 }
 
 // Determine whether a grounded T-piece placement is a T-spin.
@@ -144,7 +122,7 @@ function findReachablePlacements(board: CellValue[][], pieceType: PieceType): Pl
     }
     // Rotations CW, CCW, 180°
     for (const delta of [1, -1, 2] as const) {
-      const next = applyRotation(board, piece, delta);
+      const next = attemptRotation(board, piece, delta);
       if (!next) continue;
       const nk = bfsIdx(next.rotationIndex, next.x, next.y);
       if (bfsVisit[nk] !== gen) { bfsVisit[nk] = gen; queue.push(next); }
@@ -211,35 +189,16 @@ const W = {
   garbageUrgency:   -0.3,
 };
 
-// ---- Garbage output calculation ----
-// Mirrors the logic in versus.ts:computeGarbage.
-// combo is the NEW combo index after this clear (already incremented).
-const AI_COMBO_TABLE = [0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 4, 5] as const;
 
-function computeGarbageForAI(
-  linesCleared: number,
-  isTSpin: boolean,
-  b2bActive: boolean,  // the b2b state BEFORE this placement
-  combo: number,       // the NEW combo index after incrementing (-1 if broken)
-): number {
-  if (linesCleared === 0) return 0;
-  let base: number;
-  if (isTSpin) {
-    base = ([2, 4, 6] as const)[linesCleared - 1] ?? 6;
-  } else {
-    base = ([0, 1, 2, 4] as const)[linesCleared - 1] ?? 4;
-  }
-  const qualifying = isTSpin || linesCleared === 4;
-  if (qualifying && b2bActive) base++;
-  if (combo >= 0) base += AI_COMBO_TABLE[Math.min(combo, AI_COMBO_TABLE.length - 1)];
-  return base;
+function initHeightArray(): number[] {
+  return new Array<number>(BOARD_COLS).fill(0);
 }
 
 // Choose a well column that the AI will commit to for the entire search.
 // Prefers the right edge (col 9), but switches to left (col 0) if it is already
 // meaningfully lower — indicating the game has already developed that way.
 function pickTargetWellCol(board: CellValue[][]): number {
-  const heights = new Array<number>(BOARD_COLS).fill(0);
+  const heights = initHeightArray();
   for (let c = 0; c < BOARD_COLS; c++) {
     for (let r = 0; r < BOARD_ROWS; r++) {
       if (board[r][c] !== 0) { heights[c] = BOARD_ROWS - r; break; }
@@ -326,7 +285,7 @@ function evaluateBoardMedium(
   pendingGarbage: number = 0,
   placedType?: PieceType,
 ): number {
-  const heights = new Array<number>(BOARD_COLS).fill(0);
+  const heights = initHeightArray();
   let holes = 0;
 
   for (let c = 0; c < BOARD_COLS; c++) {
@@ -494,6 +453,8 @@ export function findBestMove(
   pendingGarbage: number = 0,
   beamWidth: number = BEAM_WIDTH,
   searchDepth: number = SEARCH_DEPTH,
+  _combo: number = -1,       // unused by medium eval — included for API consistency with findBestMoveHard
+  _b2bActive: boolean = false,
 ): { rotationIndex: number; x: number; y: number; useHold: boolean } {
   let beam: BeamNodeMedium[] = [{
     board: bot.board,
@@ -605,7 +566,7 @@ export function evaluateBoard(
   // Perfect clear: board is completely empty after this placement.
   if (board.every(row => row.every(c => c === 0))) return W.perfectClear;
 
-  const heights = new Array<number>(BOARD_COLS).fill(0);
+  const heights = initHeightArray();
   let holes = 0;
   let overhangs = 0;  // filled cells directly above an empty cell (Cold Clear's "overhang cells")
   let colTransitions = 0;
@@ -839,7 +800,7 @@ function expandBeamNodeHardHard(node: BeamNodeHard, pendingGarbage: number): Bea
       const isPerfectClear = clearedBoard.every(row => row.every(c => c === 0));
       const garbageOut = isPerfectClear
         ? 10
-        : computeGarbageForAI(linesCleared, placement.isTSpin, node.b2bActive, nextCombo);
+        : computeGarbage(linesCleared, placement.isTSpin, node.b2bActive, nextCombo);
 
       // Landing height = rows from bottom where piece's topmost row sits.
       // Higher value = piece landed near top = dangerous; penalised via W.landingHeight.
@@ -899,6 +860,8 @@ export function findBestMoveHard(
   pendingGarbage: number = 0,
   beamWidth: number = BEAM_WIDTH,
   searchDepth: number = SEARCH_DEPTH,
+  combo: number = -1,
+  b2bActive: boolean = false,
 ): { rotationIndex: number; x: number; y: number; useHold: boolean } {
   // Determine a stable well column from the current board state and commit to it for the
   // entire search.  This prevents the well from jumping between columns mid-game.
@@ -913,8 +876,8 @@ export function findBestMoveHard(
     bagState: bot.bagState,
     score: 0,
     garbageSent: 0,
-    combo: bot.combo ?? -1,
-    b2bActive: bot.b2bActive ?? false,
+    combo,
+    b2bActive,
     targetWellCol,
     firstMove: null,
     movePath: null,

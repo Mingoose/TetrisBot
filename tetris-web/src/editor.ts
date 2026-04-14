@@ -2,6 +2,9 @@ import { GameState, CellValue } from './types';
 import { pushHistory } from './rewind';
 import { BOARD_COLS, BOARD_ROWS } from './board';
 
+// Must match LOCK_DELAY_MS in game.ts (not imported to avoid circular dependency).
+const LOCK_DELAY_MS = 500;
+
 export const CELL_SIZE = 30;
 export const BOARD_OFFSET_X = 120; // pixels from canvas left to board left edge
 export const BOARD_OFFSET_Y = 20;  // pixels from canvas top to board top edge
@@ -67,7 +70,7 @@ export function exitEditor(state: GameState, spawnFn: (s: GameState) => void): v
   pushHistory(state); // allow rewinding past the edit session
   spawnFn(state);
   state.mode = 'playing';
-  state.lockDelayMs = 500;
+  state.lockDelayMs = LOCK_DELAY_MS;
   state.lockResetCount = 0;
   state.gravityAccumMs = 0;
 }

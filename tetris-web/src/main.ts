@@ -1,5 +1,5 @@
 import { initGameState, processFrame, setLockHook } from './game';
-import { setupInput, createInputState, flushInput, wasJustPressed } from './input';
+import { setupInput, createInputState, flushInput, wasJustPressed, isHeld } from './input';
 import { setupEditor } from './editor';
 import {
   draw, CANVAS_H, VERSUS_CANVAS_W,
@@ -13,15 +13,18 @@ import { setupAuthUI } from './authUI';
 import { Settings } from './settings';
 import { setupSettingsUI } from './settingsUI';
 import { GameVariant } from './types';
-import { VersusData, BotVsBotData, BotBoard, initVersusData, initBotVsBotData, applyBotMove, requestBotMove, setupPlayerLockHook } from './versus';
+import { VersusData, BotVsBotData, BotBoard, CombatState, initVersusData, initBotVsBotData, applyBotMove, requestBotMove, setupPlayerLockHook } from './versus';
 import { drawEngineOverlay } from './engineOverlay';
 import { gameStateToEngineRequest } from './engine';
 import type { EngineAnalysis } from './engine';
 import { lockPiece, clearLines } from './board';
-import type { CellValue } from './types';
+import type { CellValue, Snapshot } from './types';
 import { setPreLockCallback } from './game';
 import type { SprintReplay, ReplayEntry, VersusReplay, VersusReplayEntry, BotSnapshot } from './replay';
-import { drawReplayScreen, drawVersusReplayScreen } from './renderer';
+import { drawReplayScreen, drawVersusReplayScreen, drawReviewScreen, drawVersusReviewScreen, drawGameReviewScreen, drawVersusGameReviewScreen, GAME_REVIEW_BTN } from './renderer';
+import type { EngineRequest } from './engine';
+import type { ClassificationResult } from './moveQuality';
+import { classifyMove } from './moveQuality';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 canvas.width = VERSUS_CANVAS_W;
@@ -164,6 +167,241 @@ function stopEngineMode(): void {
   engineAnimLastAdvance = 0;
 }
 
+// ---- Game review state ----
+let sprintReviewMode = false;
+let versusReviewMode = false;
+let reviewMoveIdx = 0;
+let reviewAnalysis: EngineAnalysis | null = null;
+let reviewSelectedLine = 0;
+let reviewBoardStates: CellValue[][][] = [];
+let reviewAnimFrame = 0;
+let reviewAnimLastAdvance = 0;
+let reviewWorker: Worker | null = null;
+// DAS/ARR for stepping through moves by holding ←/→
+const REVIEW_DAS_MS = 300;
+const REVIEW_ARR_MS = 80;
+let reviewDasLeft  = 0;
+let reviewDasRight = 0;
+// Timestamp of the last step — animation is held until 1s after scrolling stops
+const REVIEW_ANIM_IDLE_MS = 1000;
+let reviewLastScrollTime = 0;
+
+function getOrCreateReviewWorker(): Worker {
+  if (!reviewWorker) {
+    reviewWorker = new Worker(new URL('./ai.worker.ts', import.meta.url), { type: 'module' });
+    reviewWorker.onerror = (e) => console.error('Review worker error:', e.message);
+    reviewWorker.onmessage = (e: MessageEvent) => {
+      if (e.data?.type !== 'analysis') return;
+      reviewAnalysis = e.data.result as EngineAnalysis;
+      reviewSelectedLine = 0;
+      reviewAnimFrame = 0;
+      reviewAnimLastAdvance = 0;
+      const snap = getCurrentReviewSnapshot();
+      if (snap && reviewAnalysis.lines.length > 0) {
+        reviewBoardStates = computeEngineBoardStates(snap.board, reviewAnalysis, 0);
+      }
+    };
+  }
+  return reviewWorker;
+}
+
+function getCurrentReviewSnapshot(): Snapshot | null {
+  if (sprintReviewMode && latestSprintReplay) {
+    return latestSprintReplay.entries[reviewMoveIdx]?.snapshot ?? null;
+  }
+  if (versusReviewMode && latestVersusReplay) {
+    return latestVersusReplay.entries[reviewMoveIdx]?.playerSnapshot ?? null;
+  }
+  return null;
+}
+
+function requestReviewAnalysis(snap: Snapshot): void {
+  reviewAnalysis = null;
+  reviewBoardStates = [];
+  reviewAnimFrame = 0;
+  reviewAnimLastAdvance = 0;
+  const request: EngineRequest = {
+    board: snap.board,
+    activeType: snap.active.type,
+    nextQueue: [...snap.nextQueue],
+    hold: snap.hold,
+    holdUsed: snap.holdUsed,
+    bagState: [...snap.bagState],
+    combo: -1,
+    b2bActive: false,
+    pendingGarbage: 0,
+    beamWidth: 48,
+    searchDepth: 6,
+    topN: 5,
+  };
+  getOrCreateReviewWorker().postMessage({ type: 'analyze', request });
+}
+
+function setReviewMove(idx: number): void {
+  const maxIdx = sprintReviewMode
+    ? (latestSprintReplay?.entries.length ?? 1) - 1
+    : (latestVersusReplay?.entries.length ?? 1) - 1;
+  reviewMoveIdx = Math.max(0, Math.min(idx, maxIdx));
+  const snap = getCurrentReviewSnapshot();
+  if (snap) requestReviewAnalysis(snap);
+}
+
+function enterSprintReview(): void {
+  if (!latestSprintReplay) return;
+  sprintReviewMode = true;
+  reviewMoveIdx = latestSprintReplay.entries.length - 1;
+  const snap = getCurrentReviewSnapshot();
+  if (snap) requestReviewAnalysis(snap);
+}
+
+function enterVersusReview(): void {
+  if (!latestVersusReplay) return;
+  versusReviewMode = true;
+  reviewMoveIdx = latestVersusReplay.entries.length - 1;
+  const snap = getCurrentReviewSnapshot();
+  if (snap) requestReviewAnalysis(snap);
+}
+
+function exitReviewMode(): void {
+  sprintReviewMode = false;
+  versusReviewMode = false;
+  reviewAnalysis = null;
+  reviewBoardStates = [];
+  reviewDasLeft = 0;
+  reviewDasRight = 0;
+  reviewLastScrollTime = 0;
+}
+
+// ---- Game review state (classification mode) ----
+let sprintGameReviewMode = false;
+let versusGameReviewMode = false;
+// For versus game review: only player-lock entries (isPlayerLock === true).
+// The full versusRecordingEntries is used for the animated replay.
+let grVersusEntries: VersusReplayEntry[] = [];
+let grMoveIdx = 0;
+let grAnalysis: EngineAnalysis | null = null;
+let grClassification: ClassificationResult | null = null;
+let grShowBestMove = false;
+let grSelectedLine = 0;
+let grBoardStates: CellValue[][][] = [];
+let grAnimFrame = 0;
+let grAnimLastAdvance = 0;
+let grWorker: Worker | null = null;
+let grDasLeft  = 0;
+let grDasRight = 0;
+let grLastScrollTime = 0;
+
+function getOrCreateGrWorker(): Worker {
+  if (!grWorker) {
+    grWorker = new Worker(new URL('./ai.worker.ts', import.meta.url), { type: 'module' });
+    grWorker.onerror = (e) => console.error('Game review worker error:', e.message);
+    grWorker.onmessage = (e: MessageEvent) => {
+      if (e.data?.type !== 'analysis') return;
+      grAnalysis = e.data.result as EngineAnalysis;
+      grSelectedLine = 0;
+      grAnimFrame = 0;
+      grAnimLastAdvance = 0;
+      const snap = getCurrentGrSnapshot();
+      if (snap) {
+        grClassification = classifyMove(grAnalysis, snap.active);
+        if (grShowBestMove && grAnalysis.lines.length > 0) {
+          grBoardStates = computeEngineBoardStates(snap.board, grAnalysis, 0);
+        }
+      }
+    };
+  }
+  return grWorker;
+}
+
+function getCurrentGrSnapshot(): Snapshot | null {
+  if (sprintGameReviewMode && latestSprintReplay) {
+    return latestSprintReplay.entries[grMoveIdx]?.snapshot ?? null;
+  }
+  if (versusGameReviewMode) {
+    return grVersusEntries[grMoveIdx]?.playerSnapshot ?? null;
+  }
+  return null;
+}
+
+function requestGrAnalysis(snap: Snapshot): void {
+  grAnalysis = null;
+  grClassification = null;
+  grBoardStates = [];
+  grAnimFrame = 0;
+  grAnimLastAdvance = 0;
+  const request: EngineRequest = {
+    board: snap.board,
+    activeType: snap.active.type,
+    nextQueue: [...snap.nextQueue],
+    hold: snap.hold,
+    holdUsed: snap.holdUsed,
+    bagState: [...snap.bagState],
+    combo: -1,
+    b2bActive: false,
+    pendingGarbage: 0,
+    beamWidth: 48,
+    searchDepth: 6,
+    topN: 30,
+  };
+  getOrCreateGrWorker().postMessage({ type: 'analyze', request });
+}
+
+function setGrMove(idx: number): void {
+  const maxIdx = sprintGameReviewMode
+    ? (latestSprintReplay?.entries.length ?? 1) - 1
+    : (grVersusEntries.length || 1) - 1;
+  grMoveIdx = Math.max(0, Math.min(idx, maxIdx));
+  grShowBestMove = false;
+  grBoardStates = [];
+  const snap = getCurrentGrSnapshot();
+  if (snap) requestGrAnalysis(snap);
+}
+
+function enterSprintGameReview(): void {
+  if (!latestSprintReplay) return;
+  sprintGameReviewMode = true;
+  grMoveIdx = latestSprintReplay.entries.length - 1;
+  grShowBestMove = false;
+  const snap = getCurrentGrSnapshot();
+  if (snap) requestGrAnalysis(snap);
+}
+
+function enterVersusGameReview(): void {
+  if (!latestVersusReplay) return;
+  versusGameReviewMode = true;
+  grVersusEntries = latestVersusReplay.entries.filter(e => e.isPlayerLock);
+  grMoveIdx = Math.max(0, grVersusEntries.length - 1);
+  grShowBestMove = false;
+  const snap = getCurrentGrSnapshot();
+  if (snap) requestGrAnalysis(snap);
+}
+
+function toggleGrBestMove(): void {
+  grShowBestMove = !grShowBestMove;
+  grSelectedLine = 0;
+  grAnimFrame = 0;
+  grAnimLastAdvance = 0;
+  if (grShowBestMove && grAnalysis && grAnalysis.lines.length > 0) {
+    const snap = getCurrentGrSnapshot();
+    if (snap) grBoardStates = computeEngineBoardStates(snap.board, grAnalysis, 0);
+  } else {
+    grBoardStates = [];
+  }
+}
+
+function exitGameReview(): void {
+  sprintGameReviewMode = false;
+  versusGameReviewMode = false;
+  grVersusEntries = [];
+  grAnalysis = null;
+  grClassification = null;
+  grBoardStates = [];
+  grShowBestMove = false;
+  grDasLeft = 0;
+  grDasRight = 0;
+  grLastScrollTime = 0;
+}
+
 // ---- Sprint replay state ----
 let latestSprintReplay: SprintReplay | null = null;
 let recordingEntries: ReplayEntry[] = [];
@@ -223,7 +461,7 @@ function startVersusRecording(): void {
   versusRecordingEntries = [];
   setPreLockCallback((snapshot, elapsedMs) => {
     if (versusData) {
-      versusRecordingEntries.push({ elapsedMs, playerSnapshot: snapshot, botSnapshot: snapshotFromBot(versusData.bot) });
+      versusRecordingEntries.push({ elapsedMs, playerSnapshot: snapshot, botSnapshot: snapshotFromBot(versusData.bot), isPlayerLock: true });
     }
   });
 }
@@ -283,7 +521,7 @@ function wireWorker(w: Worker): void {
   };
 }
 
-function requestMoveWithTimeout(bot: BotBoard, pendingGarbage: number): void {
+function requestMoveWithTimeout(bot: BotBoard, combat: CombatState): void {
   const w = getAiWorker();
   let aiParams: typeof AI_DIFFICULTY_PARAMS[AiDifficulty] | undefined;
   if (!customAiWorker) {
@@ -292,7 +530,7 @@ function requestMoveWithTimeout(bot: BotBoard, pendingGarbage: number): void {
       ? AI_DIFFICULTY_PARAMS[versusDifficulty]
       : AI_DIFFICULTY_PARAMS[builtinDiff ?? 'medium'];
   }
-  requestBotMove(w, bot, pendingGarbage, aiParams);
+  requestBotMove(w, bot, combat, aiParams);
   if (botMoveTimeout) clearTimeout(botMoveTimeout);
   botMoveTimeout = setTimeout(() => {
     botMoveTimeout = null;
@@ -313,7 +551,7 @@ function requestMoveWithTimeout(bot: BotBoard, pendingGarbage: number): void {
       }
       const fallback = getAiWorker();
       wireWorker(fallback);
-      requestBotMove(fallback, bot, pendingGarbage);
+      requestBotMove(fallback, bot, combat);
     }
   }, 2000);
 }
@@ -361,11 +599,11 @@ function stopBvbWorkers(): void {
   botVsBotData = null;
 }
 
-function requestBvbBot1Move(bot: BotBoard, pendingGarbage: number): void {
+function requestBvbBot1Move(bot: BotBoard, combat: CombatState): void {
   if (!bvbWorker1) return;
   // Custom AI workers ignore difficulty params; built-in bot1 uses the AI manager selection.
   const builtinDiff = builtinDifficultyOf(selectedAiIndex);
-  requestBotMove(bvbWorker1, bot, pendingGarbage, customAiName ? undefined : AI_DIFFICULTY_PARAMS[builtinDiff ?? 'medium']);
+  requestBotMove(bvbWorker1, bot, combat, customAiName ? undefined : AI_DIFFICULTY_PARAMS[builtinDiff ?? 'medium']);
   if (bvbBot1Timeout) clearTimeout(bvbBot1Timeout);
   if (customAiName) {
     bvbBot1Timeout = setTimeout(() => {
@@ -418,8 +656,8 @@ function startBotVsBot(): void {
     if (botVsBotData && isValidMove(e.data)) botVsBotData.pendingMove2 = e.data;
   };
 
-  requestBvbBot1Move(botVsBotData.bot1, 0);
-  requestBotMove(bvbWorker2, botVsBotData.bot2, 0, AI_DIFFICULTY_PARAMS[bvbDifficulty]);
+  requestBvbBot1Move(botVsBotData.bot1, botVsBotData.bot1Combat);
+  requestBotMove(bvbWorker2, botVsBotData.bot2, botVsBotData.bot2Combat, AI_DIFFICULTY_PARAMS[bvbDifficulty]);
 }
 
 // ---- AI manager overlay ----
@@ -530,6 +768,18 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
+// Game review click handler — "SEE BEST MOVE / HIDE BEST MOVE" button
+canvas.addEventListener('click', (e) => {
+  if (!sprintGameReviewMode && !versusGameReviewMode) return;
+  const rect = canvas.getBoundingClientRect();
+  const mx = (e.clientX - rect.left) * (VERSUS_CANVAS_W / rect.width);
+  const my = (e.clientY - rect.top)  * (CANVAS_H / rect.height);
+  const btn = GAME_REVIEW_BTN;
+  if (mx >= btn.x && mx <= btn.x + btn.w && my >= btn.y && my <= btn.y + btn.h) {
+    toggleGrBestMove();
+  }
+});
+
 // Menu click handler — hit-test against exported button rects
 canvas.addEventListener('click', (e) => {
   if (state.mode !== 'menu') return;
@@ -566,7 +816,7 @@ canvas.addEventListener('click', (e) => {
     setupPlayerLockHook(versusData);
     setupAiForGame();
     wireWorker(getAiWorker());
-    requestMoveWithTimeout(versusData.bot, 0);
+    requestMoveWithTimeout(versusData.bot, versusData.botCombat);
     startVersusRecording();
     return;
   }
@@ -604,7 +854,7 @@ canvas.addEventListener('click', (e) => {
     setLockHook(null);
     setupAiForGame();
     wireWorker(getAiWorker());
-    requestMoveWithTimeout(versusData.bot, 0);
+    requestMoveWithTimeout(versusData.bot, versusData.botCombat);
   } else {
     versusData = null;
     setLockHook(null);
@@ -674,12 +924,21 @@ async function startGame(userId: string): Promise<void> {
       engineWorker?.terminate();
       engineWorker = null;
     }
+    if ((sprintGameReviewMode || versusGameReviewMode) && state.mode === 'menu') {
+      exitGameReview();
+    }
+    if (!sprintGameReviewMode && !versusGameReviewMode && grWorker && state.mode === 'menu') {
+      grWorker.terminate();
+      grWorker = null;
+    }
 
     // ---- REPLAY MODE (sprint) ----
     if (replayMode && latestSprintReplay) {
       if (wasJustPressed(input, 'Space')) replayPaused = !replayPaused;
       if (wasJustPressed(input, 'KeyR')) { replayElapsedMs = 0; replayPaused = false; }
       if (wasJustPressed(input, 'Escape')) replayMode = false;
+      if (wasJustPressed(input, 'KeyE')) { replayMode = false; enterSprintReview(); }
+      if (wasJustPressed(input, 'KeyG')) { replayMode = false; enterSprintGameReview(); }
 
       if (!replayPaused) {
         replayElapsedMs = Math.min(replayElapsedMs + dt, latestSprintReplay.finalElapsedMs);
@@ -696,12 +955,314 @@ async function startGame(userId: string): Promise<void> {
       if (wasJustPressed(input, 'Space')) versusReplayPaused = !versusReplayPaused;
       if (wasJustPressed(input, 'KeyR')) { versusReplayElapsedMs = 0; versusReplayPaused = false; }
       if (wasJustPressed(input, 'Escape')) versusReplayMode = false;
+      if (wasJustPressed(input, 'KeyE')) { versusReplayMode = false; enterVersusReview(); }
+      if (wasJustPressed(input, 'KeyG')) { versusReplayMode = false; enterVersusGameReview(); }
 
       if (!versusReplayPaused) {
         versusReplayElapsedMs = Math.min(versusReplayElapsedMs + dt, latestVersusReplay.finalElapsedMs);
       }
 
       drawVersusReplayScreen(ctx, latestVersusReplay, versusReplayElapsedMs, versusReplayPaused);
+      flushInput(input);
+      state.rafHandle = requestAnimationFrame(gameLoop);
+      return;
+    }
+
+    // ---- REVIEW MODE (sprint) ----
+    if (sprintReviewMode && latestSprintReplay) {
+      // Step left: fire on press, then DAS → ARR repeat while held
+      if (wasJustPressed(input, 'ArrowLeft')) {
+        reviewDasLeft = 0;
+        setReviewMove(reviewMoveIdx - 1);
+        reviewLastScrollTime = timestamp;
+      } else if (isHeld(input, 'ArrowLeft')) {
+        reviewDasLeft += dt;
+        if (reviewDasLeft >= REVIEW_DAS_MS) {
+          const arr = reviewDasLeft - REVIEW_DAS_MS;
+          const steps = Math.floor(arr / REVIEW_ARR_MS) + 1;
+          const prevSteps = Math.floor((arr - dt) / REVIEW_ARR_MS) + 1;
+          if (steps > prevSteps) { setReviewMove(reviewMoveIdx - 1); reviewLastScrollTime = timestamp; }
+        }
+      } else {
+        reviewDasLeft = 0;
+      }
+      // Step right: same pattern
+      if (wasJustPressed(input, 'ArrowRight')) {
+        reviewDasRight = 0;
+        setReviewMove(reviewMoveIdx + 1);
+        reviewLastScrollTime = timestamp;
+      } else if (isHeld(input, 'ArrowRight')) {
+        reviewDasRight += dt;
+        if (reviewDasRight >= REVIEW_DAS_MS) {
+          const arr = reviewDasRight - REVIEW_DAS_MS;
+          const steps = Math.floor(arr / REVIEW_ARR_MS) + 1;
+          const prevSteps = Math.floor((arr - dt) / REVIEW_ARR_MS) + 1;
+          if (steps > prevSteps) { setReviewMove(reviewMoveIdx + 1); reviewLastScrollTime = timestamp; }
+        }
+      } else {
+        reviewDasRight = 0;
+      }
+      if (reviewAnalysis && reviewAnalysis.lines.length > 0) {
+        const lineCount = reviewAnalysis.lines.length;
+        if (wasJustPressed(input, 'ArrowUp')) {
+          reviewSelectedLine = (reviewSelectedLine - 1 + lineCount) % lineCount;
+          reviewAnimFrame = 0;
+          reviewAnimLastAdvance = 0;
+          const snap = getCurrentReviewSnapshot();
+          if (snap) reviewBoardStates = computeEngineBoardStates(snap.board, reviewAnalysis, reviewSelectedLine);
+        }
+        if (wasJustPressed(input, 'ArrowDown')) {
+          reviewSelectedLine = (reviewSelectedLine + 1) % lineCount;
+          reviewAnimFrame = 0;
+          reviewAnimLastAdvance = 0;
+          const snap = getCurrentReviewSnapshot();
+          if (snap) reviewBoardStates = computeEngineBoardStates(snap.board, reviewAnalysis, reviewSelectedLine);
+        }
+      }
+      if (wasJustPressed(input, 'Escape')) exitReviewMode();
+
+      if (reviewAnalysis && reviewBoardStates.length > 1 &&
+          timestamp - reviewLastScrollTime >= REVIEW_ANIM_IDLE_MS) {
+        const moveCount = reviewBoardStates.length - 1;
+        if (reviewAnimLastAdvance === 0) {
+          reviewAnimLastAdvance = timestamp;
+        } else if (timestamp - reviewAnimLastAdvance >= ENGINE_ANIM_MS) {
+          reviewAnimFrame = (reviewAnimFrame + 1) % moveCount;
+          reviewAnimLastAdvance = timestamp;
+        }
+      } else if (timestamp - reviewLastScrollTime < REVIEW_ANIM_IDLE_MS) {
+        // Still in the idle window — reset so animation restarts cleanly once idle
+        reviewAnimFrame = 0;
+        reviewAnimLastAdvance = 0;
+      }
+
+      drawReviewScreen(ctx, latestSprintReplay, reviewMoveIdx);
+      drawEngineOverlay(ctx, reviewAnalysis, reviewSelectedLine, reviewBoardStates, reviewAnimFrame, timestamp);
+      flushInput(input);
+      state.rafHandle = requestAnimationFrame(gameLoop);
+      return;
+    }
+
+    // ---- REVIEW MODE (versus) ----
+    if (versusReviewMode && latestVersusReplay) {
+      // Step left: fire on press, then DAS → ARR repeat while held
+      if (wasJustPressed(input, 'ArrowLeft')) {
+        reviewDasLeft = 0;
+        setReviewMove(reviewMoveIdx - 1);
+        reviewLastScrollTime = timestamp;
+      } else if (isHeld(input, 'ArrowLeft')) {
+        reviewDasLeft += dt;
+        if (reviewDasLeft >= REVIEW_DAS_MS) {
+          const arr = reviewDasLeft - REVIEW_DAS_MS;
+          const steps = Math.floor(arr / REVIEW_ARR_MS) + 1;
+          const prevSteps = Math.floor((arr - dt) / REVIEW_ARR_MS) + 1;
+          if (steps > prevSteps) { setReviewMove(reviewMoveIdx - 1); reviewLastScrollTime = timestamp; }
+        }
+      } else {
+        reviewDasLeft = 0;
+      }
+      // Step right: same pattern
+      if (wasJustPressed(input, 'ArrowRight')) {
+        reviewDasRight = 0;
+        setReviewMove(reviewMoveIdx + 1);
+        reviewLastScrollTime = timestamp;
+      } else if (isHeld(input, 'ArrowRight')) {
+        reviewDasRight += dt;
+        if (reviewDasRight >= REVIEW_DAS_MS) {
+          const arr = reviewDasRight - REVIEW_DAS_MS;
+          const steps = Math.floor(arr / REVIEW_ARR_MS) + 1;
+          const prevSteps = Math.floor((arr - dt) / REVIEW_ARR_MS) + 1;
+          if (steps > prevSteps) { setReviewMove(reviewMoveIdx + 1); reviewLastScrollTime = timestamp; }
+        }
+      } else {
+        reviewDasRight = 0;
+      }
+      if (reviewAnalysis && reviewAnalysis.lines.length > 0) {
+        const lineCount = reviewAnalysis.lines.length;
+        if (wasJustPressed(input, 'ArrowUp')) {
+          reviewSelectedLine = (reviewSelectedLine - 1 + lineCount) % lineCount;
+          reviewAnimFrame = 0;
+          reviewAnimLastAdvance = 0;
+          const snap = getCurrentReviewSnapshot();
+          if (snap) reviewBoardStates = computeEngineBoardStates(snap.board, reviewAnalysis, reviewSelectedLine);
+        }
+        if (wasJustPressed(input, 'ArrowDown')) {
+          reviewSelectedLine = (reviewSelectedLine + 1) % lineCount;
+          reviewAnimFrame = 0;
+          reviewAnimLastAdvance = 0;
+          const snap = getCurrentReviewSnapshot();
+          if (snap) reviewBoardStates = computeEngineBoardStates(snap.board, reviewAnalysis, reviewSelectedLine);
+        }
+      }
+      if (wasJustPressed(input, 'Escape')) exitReviewMode();
+
+      if (reviewAnalysis && reviewBoardStates.length > 1 &&
+          timestamp - reviewLastScrollTime >= REVIEW_ANIM_IDLE_MS) {
+        const moveCount = reviewBoardStates.length - 1;
+        if (reviewAnimLastAdvance === 0) {
+          reviewAnimLastAdvance = timestamp;
+        } else if (timestamp - reviewAnimLastAdvance >= ENGINE_ANIM_MS) {
+          reviewAnimFrame = (reviewAnimFrame + 1) % moveCount;
+          reviewAnimLastAdvance = timestamp;
+        }
+      } else if (timestamp - reviewLastScrollTime < REVIEW_ANIM_IDLE_MS) {
+        // Still in the idle window — reset so animation restarts cleanly once idle
+        reviewAnimFrame = 0;
+        reviewAnimLastAdvance = 0;
+      }
+
+      drawVersusReviewScreen(ctx, latestVersusReplay, reviewMoveIdx);
+      drawEngineOverlay(ctx, reviewAnalysis, reviewSelectedLine, reviewBoardStates, reviewAnimFrame, timestamp);
+      flushInput(input);
+      state.rafHandle = requestAnimationFrame(gameLoop);
+      return;
+    }
+
+    // ---- GAME REVIEW MODE (sprint) ----
+    if (sprintGameReviewMode && latestSprintReplay) {
+      // Step left: DAS/ARR, reset best-move on each step
+      if (wasJustPressed(input, 'ArrowLeft')) {
+        grDasLeft = 0;
+        setGrMove(grMoveIdx - 1);
+        grLastScrollTime = timestamp;
+      } else if (isHeld(input, 'ArrowLeft')) {
+        grDasLeft += dt;
+        if (grDasLeft >= REVIEW_DAS_MS) {
+          const arr = grDasLeft - REVIEW_DAS_MS;
+          const steps = Math.floor(arr / REVIEW_ARR_MS) + 1;
+          const prevSteps = Math.floor((arr - dt) / REVIEW_ARR_MS) + 1;
+          if (steps > prevSteps) { setGrMove(grMoveIdx - 1); grLastScrollTime = timestamp; }
+        }
+      } else {
+        grDasLeft = 0;
+      }
+      // Step right
+      if (wasJustPressed(input, 'ArrowRight')) {
+        grDasRight = 0;
+        setGrMove(grMoveIdx + 1);
+        grLastScrollTime = timestamp;
+      } else if (isHeld(input, 'ArrowRight')) {
+        grDasRight += dt;
+        if (grDasRight >= REVIEW_DAS_MS) {
+          const arr = grDasRight - REVIEW_DAS_MS;
+          const steps = Math.floor(arr / REVIEW_ARR_MS) + 1;
+          const prevSteps = Math.floor((arr - dt) / REVIEW_ARR_MS) + 1;
+          if (steps > prevSteps) { setGrMove(grMoveIdx + 1); grLastScrollTime = timestamp; }
+        }
+      } else {
+        grDasRight = 0;
+      }
+      // Cycle engine lines (only when best-move overlay is shown)
+      if (grShowBestMove && grAnalysis && grAnalysis.lines.length > 0) {
+        const lineCount = grAnalysis.lines.length;
+        if (wasJustPressed(input, 'ArrowUp')) {
+          grSelectedLine = (grSelectedLine - 1 + lineCount) % lineCount;
+          grAnimFrame = 0; grAnimLastAdvance = 0;
+          const snap = getCurrentGrSnapshot();
+          if (snap) grBoardStates = computeEngineBoardStates(snap.board, grAnalysis, grSelectedLine);
+        }
+        if (wasJustPressed(input, 'ArrowDown')) {
+          grSelectedLine = (grSelectedLine + 1) % lineCount;
+          grAnimFrame = 0; grAnimLastAdvance = 0;
+          const snap = getCurrentGrSnapshot();
+          if (snap) grBoardStates = computeEngineBoardStates(snap.board, grAnalysis, grSelectedLine);
+        }
+      }
+      if (wasJustPressed(input, 'KeyB')) toggleGrBestMove();
+      if (wasJustPressed(input, 'Escape')) exitGameReview();
+
+      // Animation ticker (only while best-move overlay is active)
+      if (grShowBestMove && grBoardStates.length > 1 &&
+          timestamp - grLastScrollTime >= REVIEW_ANIM_IDLE_MS) {
+        const moveCount = grBoardStates.length - 1;
+        if (grAnimLastAdvance === 0) {
+          grAnimLastAdvance = timestamp;
+        } else if (timestamp - grAnimLastAdvance >= ENGINE_ANIM_MS) {
+          grAnimFrame = (grAnimFrame + 1) % moveCount;
+          grAnimLastAdvance = timestamp;
+        }
+      } else if (grShowBestMove && timestamp - grLastScrollTime < REVIEW_ANIM_IDLE_MS) {
+        grAnimFrame = 0;
+        grAnimLastAdvance = 0;
+      }
+
+      drawGameReviewScreen(ctx, latestSprintReplay, grMoveIdx, grClassification, grShowBestMove, timestamp);
+      if (grShowBestMove) drawEngineOverlay(ctx, grAnalysis, grSelectedLine, grBoardStates, grAnimFrame, timestamp);
+      flushInput(input);
+      state.rafHandle = requestAnimationFrame(gameLoop);
+      return;
+    }
+
+    // ---- GAME REVIEW MODE (versus) ----
+    if (versusGameReviewMode && latestVersusReplay) {
+      // Step left
+      if (wasJustPressed(input, 'ArrowLeft')) {
+        grDasLeft = 0;
+        setGrMove(grMoveIdx - 1);
+        grLastScrollTime = timestamp;
+      } else if (isHeld(input, 'ArrowLeft')) {
+        grDasLeft += dt;
+        if (grDasLeft >= REVIEW_DAS_MS) {
+          const arr = grDasLeft - REVIEW_DAS_MS;
+          const steps = Math.floor(arr / REVIEW_ARR_MS) + 1;
+          const prevSteps = Math.floor((arr - dt) / REVIEW_ARR_MS) + 1;
+          if (steps > prevSteps) { setGrMove(grMoveIdx - 1); grLastScrollTime = timestamp; }
+        }
+      } else {
+        grDasLeft = 0;
+      }
+      // Step right
+      if (wasJustPressed(input, 'ArrowRight')) {
+        grDasRight = 0;
+        setGrMove(grMoveIdx + 1);
+        grLastScrollTime = timestamp;
+      } else if (isHeld(input, 'ArrowRight')) {
+        grDasRight += dt;
+        if (grDasRight >= REVIEW_DAS_MS) {
+          const arr = grDasRight - REVIEW_DAS_MS;
+          const steps = Math.floor(arr / REVIEW_ARR_MS) + 1;
+          const prevSteps = Math.floor((arr - dt) / REVIEW_ARR_MS) + 1;
+          if (steps > prevSteps) { setGrMove(grMoveIdx + 1); grLastScrollTime = timestamp; }
+        }
+      } else {
+        grDasRight = 0;
+      }
+      // Cycle engine lines when best-move overlay is shown
+      if (grShowBestMove && grAnalysis && grAnalysis.lines.length > 0) {
+        const lineCount = grAnalysis.lines.length;
+        if (wasJustPressed(input, 'ArrowUp')) {
+          grSelectedLine = (grSelectedLine - 1 + lineCount) % lineCount;
+          grAnimFrame = 0; grAnimLastAdvance = 0;
+          const snap = getCurrentGrSnapshot();
+          if (snap) grBoardStates = computeEngineBoardStates(snap.board, grAnalysis, grSelectedLine);
+        }
+        if (wasJustPressed(input, 'ArrowDown')) {
+          grSelectedLine = (grSelectedLine + 1) % lineCount;
+          grAnimFrame = 0; grAnimLastAdvance = 0;
+          const snap = getCurrentGrSnapshot();
+          if (snap) grBoardStates = computeEngineBoardStates(snap.board, grAnalysis, grSelectedLine);
+        }
+      }
+      if (wasJustPressed(input, 'KeyB')) toggleGrBestMove();
+      if (wasJustPressed(input, 'Escape')) exitGameReview();
+
+      // Animation ticker
+      if (grShowBestMove && grBoardStates.length > 1 &&
+          timestamp - grLastScrollTime >= REVIEW_ANIM_IDLE_MS) {
+        const moveCount = grBoardStates.length - 1;
+        if (grAnimLastAdvance === 0) {
+          grAnimLastAdvance = timestamp;
+        } else if (timestamp - grAnimLastAdvance >= ENGINE_ANIM_MS) {
+          grAnimFrame = (grAnimFrame + 1) % moveCount;
+          grAnimLastAdvance = timestamp;
+        }
+      } else if (grShowBestMove && timestamp - grLastScrollTime < REVIEW_ANIM_IDLE_MS) {
+        grAnimFrame = 0;
+        grAnimLastAdvance = 0;
+      }
+
+      drawVersusGameReviewScreen(ctx, grVersusEntries, grMoveIdx, grClassification, grShowBestMove, timestamp);
+      if (grShowBestMove) drawEngineOverlay(ctx, grAnalysis, grSelectedLine, grBoardStates, grAnimFrame, timestamp);
       flushInput(input);
       state.rafHandle = requestAnimationFrame(gameLoop);
       return;
@@ -718,7 +1279,7 @@ async function startGame(userId: string): Promise<void> {
           versusData = initVersusData();
           setupAiForGame();
           wireWorker(getAiWorker());
-          requestMoveWithTimeout(versusData.bot, 0);
+          requestMoveWithTimeout(versusData.bot, versusData.botCombat);
         } else if (state.variant === 'botvsbot') {
           stopBvbWorkers();
           restartState('botvsbot');
@@ -739,11 +1300,31 @@ async function startGame(userId: string): Promise<void> {
         replayPaused = false;
       }
 
+      // "E" key on sprint complete screen → enter engine analysis (was "G")
+      if (wasSprintGameover && latestSprintReplay && wasJustPressed(input, 'KeyE')) {
+        enterSprintReview();
+      }
+
+      // "G" key on sprint complete screen → enter game review (new)
+      if (wasSprintGameover && latestSprintReplay && wasJustPressed(input, 'KeyG')) {
+        enterSprintGameReview();
+      }
+
       // "W" key on versus result screen → enter versus replay
       if (wasVersusGameover && latestVersusReplay && wasJustPressed(input, 'KeyW')) {
         versusReplayMode = true;
         versusReplayElapsedMs = 0;
         versusReplayPaused = false;
+      }
+
+      // "E" key on versus result screen → enter engine analysis (was "G")
+      if (wasVersusGameover && latestVersusReplay && wasJustPressed(input, 'KeyE')) {
+        enterVersusReview();
+      }
+
+      // "G" key on versus result screen → enter game review (new)
+      if (wasVersusGameover && latestVersusReplay && wasJustPressed(input, 'KeyG')) {
+        enterVersusGameReview();
       }
 
       processFrame(state, input, timestamp, settings);
@@ -765,7 +1346,7 @@ async function startGame(userId: string): Promise<void> {
           setupPlayerLockHook(versusData);
           setupAiForGame();
           wireWorker(getAiWorker());
-          requestMoveWithTimeout(versusData.bot, 0);
+          requestMoveWithTimeout(versusData.bot, versusData.botCombat);
           startVersusRecording();
         }
 
@@ -843,10 +1424,11 @@ async function startGame(userId: string): Promise<void> {
               elapsedMs: timestamp - state.sprintStartTime,
               playerSnapshot: snapshotFromState(state),
               botSnapshot: snapshotFromBot(versusData.bot),
+              isPlayerLock: false,
             });
           }
           if (!versusData.bot.dead) {
-            requestMoveWithTimeout(versusData.bot, versusData.botCombat.pendingGarbage);
+            requestMoveWithTimeout(versusData.bot, versusData.botCombat);
           }
         }
         if (!versusData.bot.dead && versusData.pendingMove === null &&
@@ -873,7 +1455,7 @@ async function startGame(userId: string): Promise<void> {
             : `Invalid position (x:${m.x}, y:${m.y}, rot:${m.rotationIndex}) was occupied — hard drop used instead`;
         }
         if (!botVsBotData.bot1.dead && bvbWorker1)
-          requestBvbBot1Move(botVsBotData.bot1, botVsBotData.bot1Combat.pendingGarbage);
+          requestBvbBot1Move(botVsBotData.bot1, botVsBotData.bot1Combat);
       }
       if (!botVsBotData.bot1.dead && !botVsBotData.pendingMove1 &&
           botVsBotData.bot1ThinkAccumMs >= msPerPiece && !customAiWarning && !customAiError) {
@@ -887,7 +1469,7 @@ async function startGame(userId: string): Promise<void> {
         const m = botVsBotData.pendingMove2; botVsBotData.pendingMove2 = null;
         applyBotMove(m, botVsBotData.bot2, botVsBotData.bot2Combat, botVsBotData.bot1Combat);
         if (!botVsBotData.bot2.dead && bvbWorker2)
-          requestBotMove(bvbWorker2, botVsBotData.bot2, botVsBotData.bot2Combat.pendingGarbage, AI_DIFFICULTY_PARAMS[bvbDifficulty]);
+          requestBotMove(bvbWorker2, botVsBotData.bot2, botVsBotData.bot2Combat, AI_DIFFICULTY_PARAMS[bvbDifficulty]);
       }
       if (!botVsBotData.bot2.dead && !botVsBotData.pendingMove2 &&
           botVsBotData.bot2ThinkAccumMs >= msPerPiece && !customAiWarning && !customAiError) {

@@ -1,5 +1,5 @@
 import { ActivePiece, CellValue, PieceType } from './types';
-import { getRotation } from './pieces';
+import { getRotation, getWallKicks } from './pieces';
 
 export const BOARD_COLS = 10;
 export const BOARD_ROWS = 20;
@@ -138,6 +138,23 @@ export function addGarbageLines(board: CellValue[][], lines: number, gapCol: num
     return row;
   };
   return [...shifted, ...Array.from({ length: lines }, makeRow)];
+}
+
+// Apply a rotation (delta = +1 CW, -1 CCW, +2 180°) with SRS wall kicks.
+// Returns the rotated piece if any kick succeeds, or null if all kicks are blocked.
+export function attemptRotation(board: CellValue[][], piece: ActivePiece, delta: number): ActivePiece | null {
+  const newIndex = ((piece.rotationIndex + delta) % 4 + 4) % 4;
+  // CW / 180°: use kicks from the 'from' state. CCW: use negated kicks from the 'to' state.
+  const kickIndex = delta > 0 ? piece.rotationIndex : newIndex;
+  const kicks = getWallKicks(piece.type, kickIndex);
+  const kickList: Array<[number, number]> = delta < 0
+    ? kicks.map(([dx, dy]) => [-dx, -dy] as [number, number])
+    : kicks;
+  for (const [kdx, kdy] of kickList) {
+    const candidate: ActivePiece = { ...piece, rotationIndex: newIndex, x: piece.x + kdx, y: piece.y + kdy };
+    if (!collides(board, candidate, 0, 0)) return candidate;
+  }
+  return null;
 }
 
 // Count how many of the 4 corners of a T piece's 3×3 bounding box are occupied

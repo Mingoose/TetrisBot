@@ -3,14 +3,7 @@ import type { EngineAnalysis, EngineMove } from './engine';
 import { PIECE_COLORS, getRotation } from './pieces';
 import { CELL_SIZE, BOARD_OFFSET_X, BOARD_OFFSET_Y } from './editor';
 import { BOARD_COLS, BOARD_ROWS } from './board';
-
-// Layout — derived from the same constants as renderer.ts
-const BOARD_W  = BOARD_COLS * CELL_SIZE;   // 300
-const BOARD_H  = BOARD_ROWS * CELL_SIZE;   // 600
-const CANVAS_W = BOARD_OFFSET_X + BOARD_W + 120; // 540
-const CANVAS_H = BOARD_H + BOARD_OFFSET_Y * 2;   // 640
-const BOT_CELL_SIZE = 20;
-const VERSUS_CANVAS_W = CANVAS_W + 20 + BOARD_COLS * BOT_CELL_SIZE + 20; // 780
+import { BOARD_W, BOARD_H, CANVAS_W, CANVAS_H, VERSUS_CANVAS_W } from './renderer';
 
 // Notation panel in the unused right region of the canvas
 const PANEL_X = CANVAS_W + 8;
