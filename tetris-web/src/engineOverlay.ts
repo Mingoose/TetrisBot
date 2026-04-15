@@ -345,8 +345,8 @@ function drawPanel(
   }
 
   // Footer
-  ctx.fillStyle = '#3a3a66';
-  ctx.font = '11px monospace';
+  ctx.fillStyle = '#4a4a88';
+  ctx.font = '12px monospace';
   ctx.textAlign = 'center';
   ctx.fillText('↑↓ cycle lines', PANEL_X + PANEL_W / 2, PANEL_Y + PANEL_H - 6);
 }

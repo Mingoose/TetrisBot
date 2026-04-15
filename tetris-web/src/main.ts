@@ -4,7 +4,7 @@ import { setupEditor } from './editor';
 import {
   draw, CANVAS_H, VERSUS_CANVAS_W,
   MENU_SPRINT_BTN, MENU_CREATIVE_BTN, MENU_VERSUS_BTN, MENU_WATCH_BTN, MENU_BVB_BTN, MENU_UPLOAD_BTN,
-  MENU_DIFF_EASY_BTN, MENU_DIFF_MEDIUM_BTN, MENU_DIFF_HARD_BTN,
+  MENU_DIFF_EASY_BTN, MENU_DIFF_MEDIUM_BTN, MENU_DIFF_HARD_BTN, MENU_DIFF_EXPERIMENTAL_BTN,
 } from './renderer';
 import { AiDifficulty, AI_DIFFICULTY_PARAMS } from './ai';
 import { loadSettings } from './storage';
@@ -106,6 +106,7 @@ let versusDifficulty: AiDifficulty = 'medium';
 let versusDifficultyPending = false;
 let bvbDifficulty: AiDifficulty = 'medium';
 let bvbDifficultyPending = false;
+let cnnReady = false;
 
 // ---- Engine analysis state ----
 let engineMode = false;
@@ -492,6 +493,7 @@ function getAiWorker(): Worker {
   if (!aiWorker) {
     aiWorker = new Worker(new URL('./ai.worker.ts', import.meta.url), { type: 'module' });
     aiWorker.onerror = (e) => console.error('Built-in AI worker error:', e.message);
+    wireWorker(aiWorker);
   }
   return aiWorker;
 }
@@ -505,6 +507,8 @@ function isValidMove(m: unknown): m is { rotationIndex: number; x: number; y: nu
 
 function wireWorker(w: Worker): void {
   w.onmessage = (e) => {
+    if (e.data?.type === 'cnn_ready') { cnnReady = true; return; }
+    if (e.data?.type === 'cnn_unavailable') { cnnReady = false; return; }
     if (e.data?.error) {
       console.warn('AI worker error:', e.data.error);
       if (customAiWorker) customAiError = `Runtime error: ${e.data.error}`;
@@ -803,9 +807,10 @@ canvas.addEventListener('click', (e) => {
   // Difficulty selection screen (shared by versus and bot-vs-bot)
   if (versusDifficultyPending) {
     let chosen: AiDifficulty | null = null;
-    if (hit(MENU_DIFF_EASY_BTN))   chosen = 'easy';
-    if (hit(MENU_DIFF_MEDIUM_BTN)) chosen = 'medium';
-    if (hit(MENU_DIFF_HARD_BTN))   chosen = 'hard';
+    if (hit(MENU_DIFF_EASY_BTN))                          chosen = 'easy';
+    if (hit(MENU_DIFF_MEDIUM_BTN))                        chosen = 'medium';
+    if (hit(MENU_DIFF_HARD_BTN))                          chosen = 'hard';
+    if (hit(MENU_DIFF_EXPERIMENTAL_BTN) && cnnReady)      chosen = 'experimental';
     if (!chosen) return;
     versusDifficulty = chosen;
     versusDifficultyPending = false;
@@ -823,9 +828,10 @@ canvas.addEventListener('click', (e) => {
 
   if (bvbDifficultyPending) {
     let chosen: AiDifficulty | null = null;
-    if (hit(MENU_DIFF_EASY_BTN))   chosen = 'easy';
-    if (hit(MENU_DIFF_MEDIUM_BTN)) chosen = 'medium';
-    if (hit(MENU_DIFF_HARD_BTN))   chosen = 'hard';
+    if (hit(MENU_DIFF_EASY_BTN))                          chosen = 'easy';
+    if (hit(MENU_DIFF_MEDIUM_BTN))                        chosen = 'medium';
+    if (hit(MENU_DIFF_HARD_BTN))                          chosen = 'hard';
+    if (hit(MENU_DIFF_EXPERIMENTAL_BTN) && cnnReady)      chosen = 'experimental';
     if (!chosen) return;
     bvbDifficulty = chosen;
     bvbDifficultyPending = false;
@@ -1493,7 +1499,7 @@ async function startGame(userId: string): Promise<void> {
       ? (customAiName ?? AI_DIFFICULTY_PARAMS[versusDifficulty].label)
       : managerBotName;
     const bot2Name = AI_DIFFICULTY_PARAMS[bvbDifficulty].label;
-    draw(ctx, state, versusData, customAiName, botVsBotData, isAdmin, customAiError, customAiWarning, versusDifficultyPending || bvbDifficultyPending, bot1Name, bot2Name, settings.keybindings);
+    draw(ctx, state, versusData, customAiName, botVsBotData, isAdmin, customAiError, customAiWarning, versusDifficultyPending || bvbDifficultyPending, bot1Name, bot2Name, settings.keybindings, cnnReady);
     if (engineMode && state.mode === 'paused' && state.variant === 'creative') {
       if (engineAnalysis && engineBoardStates.length > 1) {
         const moveCount = engineBoardStates.length - 1;
@@ -1512,5 +1518,9 @@ async function startGame(userId: string): Promise<void> {
 
   state.rafHandle = requestAnimationFrame(gameLoop);
 }
+
+// Eagerly create the AI worker so CNN model loading begins immediately.
+// wireWorker is called inside getAiWorker() on first creation.
+getAiWorker();
 
 setupAuthUI(startGame);

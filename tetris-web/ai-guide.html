@@ -311,13 +311,99 @@
     <h2><span class="section-num">04</span> Input: <code>pendingGarbage</code></h2>
 
     <p>
-      A <code>number</code> representing garbage lines that will arrive at the bottom of your board
-      soon. A value of <code>0</code> means no incoming garbage. Use this to decide whether to
-      play aggressively (clear lines fast to cancel garbage) or stack normally.
+      A <code>number</code> representing garbage lines queued to arrive at the bottom of your board
+      on your next lock. Each garbage row is a full row of filled cells with one random gap.
+      Incoming garbage is <strong>cancelled</strong> by your own outgoing attack before anything
+      hits your board — so clearing lines under pressure is doubly valuable.
     </p>
 
+    <p>
+      Use <code>pendingGarbage</code> to adjust strategy: weight line clears more heavily when
+      it is large (survival mode), and play normally or offensively when it is 0.
+    </p>
+
+    <div class="callout tip">
+      <p><strong>Threshold tip:</strong> the built-in hard AI shifts into garbage-clearing mode when
+      <code>pendingGarbage &gt; 0</code>. A simple heuristic: if <code>pendingGarbage &ge; 4</code>
+      (a Tetris worth of garbage), strongly prefer any placement that clears lines over shape-optimal
+      placements.</p>
+    </div>
+
+    <!-- ── GARBAGE & ATTACK ──────────────────────────────────── -->
+    <h2><span class="section-num">05</span> Garbage &amp; attack system</h2>
+
+    <p>
+      Every line clear sends a certain number of garbage lines to your opponent. Understanding this
+      table is essential for building a competitive AI — maximising attack per piece is just as
+      important as keeping a clean board.
+    </p>
+
+    <h3>Base attack values</h3>
+    <table>
+      <thead><tr><th>Clear type</th><th>Lines sent</th><th>Qualifies for B2B?</th></tr></thead>
+      <tbody>
+        <tr><td>Single (1 line)</td><td>0</td><td>No</td></tr>
+        <tr><td>Double (2 lines)</td><td>1</td><td>No</td></tr>
+        <tr><td>Triple (3 lines)</td><td>2</td><td>No</td></tr>
+        <tr><td>Tetris (4 lines)</td><td>4</td><td>Yes</td></tr>
+        <tr><td>T-spin single</td><td>2</td><td>Yes</td></tr>
+        <tr><td>T-spin double (TSD)</td><td>4</td><td>Yes</td></tr>
+        <tr><td>T-spin triple (TST)</td><td>6</td><td>Yes</td></tr>
+        <tr><td>Perfect clear</td><td>10</td><td>—</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Back-to-back bonus (+1)</h3>
+    <p>
+      Chaining two or more qualifying clears (Tetris or any T-spin) in a row without a non-qualifying
+      clear in between grants <strong>+1 line</strong> to every qualifying clear after the first.
+      The <code>b2bActive</code> flag in the internal engine tracks this, but it is not currently
+      exposed on the <code>bot</code> object — you would need to track it yourself.
+    </p>
+    <table>
+      <thead><tr><th>Clear type</th><th>Normal</th><th>Back-to-back</th></tr></thead>
+      <tbody>
+        <tr><td>Tetris</td><td>4</td><td>5</td></tr>
+        <tr><td>T-spin single</td><td>2</td><td>3</td></tr>
+        <tr><td>T-spin double</td><td>4</td><td>5</td></tr>
+        <tr><td>T-spin triple</td><td>6</td><td>7</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Combo bonus</h3>
+    <p>
+      Clearing at least one line on consecutive pieces earns a cumulative combo bonus added on top
+      of the base attack. The combo counter resets the moment you lock a piece without clearing.
+      This game uses the Jstris combo table:
+    </p>
+    <table>
+      <thead><tr><th>Combo count</th><th>Bonus lines</th></tr></thead>
+      <tbody>
+        <tr><td>1st, 2nd clear</td><td>+0</td></tr>
+        <tr><td>3rd, 4th</td><td>+1</td></tr>
+        <tr><td>5th, 6th</td><td>+2</td></tr>
+        <tr><td>7th, 8th</td><td>+3</td></tr>
+        <tr><td>9th, 10th, 11th</td><td>+4</td></tr>
+        <tr><td>12th+</td><td>+5</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Cancellation</h3>
+    <p>
+      Your attack is subtracted from your incoming <code>pendingGarbage</code> first. Only the
+      surplus reaches your opponent, and only the uncancelled remainder arrives on your board.
+      Example: you have 6 incoming garbage and clear a Tetris (+4) — 4 lines are cancelled,
+      2 lines still arrive on your board, and nothing is sent to your opponent.
+    </p>
+
+    <div class="callout tip">
+      <p><strong>Efficiency note:</strong> T-spin doubles (4 lines sent for 2 lines cleared) and
+      back-to-back Tetrises (5 lines sent for 4 cleared) are the most lines-sent-per-piece-used
+      at high level. A sustained combo — even with doubles — can exceed both if the board stays clean.</p>
+    </div>
+
     <!-- ── RETURN VALUE ──────────────────────────────────────── -->
-    <h2><span class="section-num">05</span> Return value</h2>
+    <h2><span class="section-num">06</span> Return value</h2>
 
     <p>Return a plain object with these four fields:</p>
 
@@ -350,11 +436,12 @@
     </table>
 
     <div class="callout">
-      <p>The easiest way to find a valid <code>y</code> is to compute a hard-drop: drop the piece down from row 0 until it collides — that landing row is your <code>y</code>. See <code>hardDropY()</code> in the example.</p>
+      <p>The easiest way to find a valid <code>y</code> is to compute a hard-drop: drop the piece from row 0 until it collides — that landing row is your <code>y</code>. See <code>hardDropY()</code> in the example.</p>
+      <p><strong>Bounding box <code>x</code> can be negative.</strong> Because the I piece uses a 4×4 grid with the vertical bar offset to column 1 or 2, a valid placement in board column 0 requires <code>x = −1</code> or <code>x = −2</code>. Always use <code>collides()</code> to validate; never clamp <code>x</code> to ≥ 0.</p>
     </div>
 
     <!-- ── CONSTRAINTS ───────────────────────────────────────── -->
-    <h2><span class="section-num">06</span> Constraints</h2>
+    <h2><span class="section-num">07</span> Constraints</h2>
 
     <table>
       <thead>
@@ -385,7 +472,7 @@
     </table>
 
     <!-- ── ROTATIONS & SRS ──────────────────────────────────── -->
-    <h2><span class="section-num">07</span> Rotation states &amp; SRS wall kicks</h2>
+    <h2><span class="section-num">08</span> Rotation states &amp; SRS wall kicks</h2>
 
     <h3>The four rotation states</h3>
     <p>
@@ -522,7 +609,7 @@
     </div>
 
     <!-- ── HELPER FUNCTIONS ──────────────────────────────────── -->
-    <h2><span class="section-num">08</span> Helper functions you'll need</h2>
+    <h2><span class="section-num">09</span> Helper functions you'll need</h2>
 
     <p>
       Because your file runs in isolation you must include your own board-manipulation utilities.
@@ -531,7 +618,7 @@
 
     <h3>Piece rotation matrices</h3>
     <p>
-      Copy the <code>PIECES</code> constant from section 07 above (or from <code>example-ai.js</code>).
+      Copy the <code>PIECES</code> constant from section 08 above (or from <code>example-ai.js</code>).
     </p>
 
     <h3><code>collides(board, rotation, x, y)</code></h3>
@@ -581,7 +668,7 @@
 }</pre>
 
     <!-- ── EVALUATION ─────────────────────────────────────────── -->
-    <h2><span class="section-num">09</span> Writing an evaluation function</h2>
+    <h2><span class="section-num">10</span> Writing an evaluation function</h2>
 
     <p>
       Your evaluation function scores a board state — <strong>higher = better</strong>.
@@ -610,15 +697,21 @@
         </tr>
         <tr>
           <td>Lines cleared</td>
-          <td>+0 / +1 / +2.5 / +5</td>
-          <td>Reward clearing 2, 3, or 4 lines. Clearing 1 line alone is roughly break-even.</td>
+          <td>−0.5 / +1 / +2.5 / +5</td>
+          <td>Single clears (1 line) slightly hurt board quality. Doubles onward are positive.</td>
         </tr>
       </tbody>
     </table>
 
     <p>
-      Tune the weights to change your AI's play style. Heavier hole penalties make the AI
-      prioritise clean stacking; heavier line-clear bonuses encourage aggressive Tetris setups.
+      These weights optimise for clean survival. To play offensively — sending garbage via Tetrises
+      or T-spins — you'll need additional heuristics: a well column bonus, a T-spin slot detector,
+      and rewarding nearly-full rows that are one piece away from clearing.
+    </p>
+
+    <p>
+      Tune the weights to change play style. Heavier hole penalties produce very flat boards;
+      higher line-clear bonuses drive Tetris or T-spin setups even at the cost of some board risk.
     </p>
 
     <h3>Using lookahead</h3>
@@ -626,11 +719,19 @@
       For stronger play, simulate placements for the next piece too (two-piece lookahead).
       <code>bot.nextQueue[0]</code> is the next piece, <code>bot.nextQueue[1..4]</code> are the
       pieces after that, and <code>bot.bagState</code> contains the rest of the current 7-bag.
-      Multi-piece search grows exponentially — stay well under 2 s.
+      Multi-piece search grows exponentially — stay comfortably under 2 s.
+    </p>
+
+    <h3>Responding to garbage</h3>
+    <p>
+      When <code>pendingGarbage</code> is large, your evaluation should temporarily favour placements
+      that clear lines over placements that build setups. One practical approach: add
+      <code>pendingGarbage * linesCleared * 0.4</code> to the score so clearing under pressure
+      becomes increasingly attractive as the threat grows.
     </p>
 
     <!-- ── EXAMPLE WALKTHROUGH ───────────────────────────────── -->
-    <h2><span class="section-num">10</span> Annotated example walkthrough</h2>
+    <h2><span class="section-num">11</span> Annotated example walkthrough</h2>
 
     <p>How the example AI fits together:</p>
 
@@ -643,7 +744,7 @@
 };
 
 <span class="comment">// ── 2. Board utilities ──────────────────────────────────────────
-// collides, hardDropY, lockAndClear — see Section 07 above.</span>
+// collides, hardDropY, lockAndClear — see Section 09 above.</span>
 
 <span class="comment">// ── 3. Evaluation function ──────────────────────────────────────
 // Returns a score — higher is better.</span>
@@ -654,12 +755,14 @@
 }
 
 <span class="comment">// ── 4. Move finder ──────────────────────────────────────────────
-// Try every (rotation, column) combination; return the best one.</span>
+// Try every (rotation, column) combination; return the best one.
+// x starts at -2 to handle I-piece vertical rotations whose bounding
+// box extends left of the actual filled cells (see Section 08).</span>
 <span class="kw">function</span> <span class="key">bestPlacementFor</span>(board, pieceType) {
   <span class="kw">let</span> best = <span class="kw">null</span>, bestScore = -Infinity;
   <span class="kw">for</span> (<span class="kw">let</span> rot = <span class="num">0</span>; rot &lt; <span class="num">4</span>; rot++) {
     <span class="kw">const</span> rotation = PIECES[pieceType][rot];
-    <span class="kw">for</span> (<span class="kw">let</span> x = <span class="num">0</span>; x &lt;= <span class="num">10</span> - rotation[<span class="num">0</span>].length; x++) {
+    <span class="kw">for</span> (<span class="kw">let</span> x = <span class="num">-2</span>; x &lt;= <span class="num">10</span> - rotation[<span class="num">0</span>].length; x++) {
       <span class="kw">if</span> (collides(board, rotation, x, <span class="num">0</span>)) <span class="kw">continue</span>; <span class="comment">// column blocked at spawn</span>
       <span class="kw">const</span> y = hardDropY(board, rotation, x);
       <span class="kw">const</span> { board: result, linesCleared } = lockAndClear(board, rotation, x, y);
@@ -690,7 +793,7 @@
 }</pre>
 
     <!-- ── FULL SOURCE ──────────────────────────────────────────── -->
-    <h2><span class="section-num">11</span> Full source: <code>example-ai.js</code></h2>
+    <h2><span class="section-num">12</span> Full source: <code>example-ai.js</code></h2>
 
     <p>You can also copy the full source directly from here and save it as a <code>.js</code> file:</p>
 
@@ -797,7 +900,7 @@ function bestPlacementFor(board, pieceType) {
   let best = null, bestScore = -Infinity;
   for (let rot = 0; rot &lt; 4; rot++) {
     const rotation = PIECES[pieceType][rot % 4];
-    for (let x = 0; x &lt;= BOARD_COLS - rotation[0].length; x++) {
+    for (let x = -2; x &lt;= BOARD_COLS - rotation[0].length; x++) {
       if (collides(board, rotation, x, 0)) continue;
       const y = hardDropY(board, rotation, x);
       const { board: result, linesCleared } = lockAndClear(board, rotation, x, y);
@@ -824,15 +927,17 @@ function getBestMove(bot, pendingGarbage) {
     </div>
 
     <!-- ── TIPS ───────────────────────────────────────────────── -->
-    <h2><span class="section-num">12</span> Tips for stronger play</h2>
+    <h2><span class="section-num">13</span> Tips for stronger play</h2>
 
     <ul>
-      <li>Start with the example, verify it uploads and plays, then tune weights in <code>evaluate()</code>.</li>
-      <li>Add a two-piece lookahead: for each candidate placement of the active piece, run <code>bestPlacementFor</code> on the resulting board with <code>bot.nextQueue[0]</code>.</li>
-      <li>React to <code>pendingGarbage &gt; 4</code> by temporarily weighting line clears more heavily.</li>
-      <li>Keep a well column (one intentionally low column) for Tetris setups — the built-in AI does this explicitly.</li>
-      <li>Use <code>console.log()</code> freely — output appears in the browser DevTools console and doesn't affect play.</li>
-      <li>Profile with <code>performance.now()</code> to ensure you stay comfortably under the 2 s limit even on slow machines.</li>
+      <li>Start with the example, verify it uploads and plays, then tune weights in <code>evaluate()</code> until the play style feels right.</li>
+      <li>Add a two-piece lookahead: for each candidate placement of the active piece, run <code>bestPlacementFor</code> on the resulting board with <code>bot.nextQueue[0]</code>. This alone dramatically improves quality.</li>
+      <li>Keep a well column — one intentionally low column reserved for the I piece. Reward boards where exactly one column is meaningfully lower than its neighbours. This is how the built-in AI maintains a Tetris lane.</li>
+      <li>React to <code>pendingGarbage &gt; 4</code> by weighting line clears more heavily in <code>evaluate()</code>. Survival first, offensive play second.</li>
+      <li>For T-spin play: reward placements that leave a T-shaped gap with three corners filled (TSD/TST slot). The attack efficiency of a T-spin double matches a Tetris at 4 lines each, but requires only 2 rows of setup instead of 4.</li>
+      <li>Track combos yourself if you want to factor them in: after each line clear, increment a counter; reset it on any zero-clear lock. A 5-combo adds +2 to every clear's attack value — worth preserving if the board allows it.</li>
+      <li>Use <code>console.log()</code> freely — output appears in browser DevTools and doesn't affect play.</li>
+      <li>Profile with <code>performance.now()</code> to ensure you stay well under 2 s even on slow machines. A two-piece lookahead over all 7 pieces × 4 rotations × 10 columns (280 states per level) runs in microseconds — the budget is generous.</li>
     </ul>
 
   </div>

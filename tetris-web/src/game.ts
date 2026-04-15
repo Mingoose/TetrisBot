@@ -361,6 +361,12 @@ export function processFrame(
   if (processRight)
     input.dasRight = handleDasArr(state, wasJustPressed(input, kb.moveRight), input.dasRight,  1, dt, DAS_MS, ARR_MS);
 
+  // Direction-change delay (DCD): after processing the winning just-press, reset the
+  // losing direction's DAS so it must re-charge before ARR resumes. Applied after
+  // movement so the tap registers first, then the opposing direction re-charges.
+  if (!processRight && wasJustPressed(input, kb.moveLeft))  input.dasRight = 0;
+  if (!processLeft  && wasJustPressed(input, kb.moveRight)) input.dasLeft  = 0;
+
   // Gravity
   const interval = gravityInterval(state.level) / (softDropping ? SOFT_DROP_FACTOR : 1);
   state.gravityAccumMs += dt;

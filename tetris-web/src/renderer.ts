@@ -36,22 +36,24 @@ export const VERSUS_CANVAS_W = BOT_BOARD_X + BOT_BOARD_W + 20;
 
 // Menu button rects — exported so main.ts can hit-test clicks
 export interface ButtonRect { x: number; y: number; w: number; h: number; }
-const BTN_W = 160;
+const BTN_W = 128;  // narrower to fit 4 difficulty buttons in one row
 const BTN_H = 56;
-const BTN_GAP = 20;
+const BTN_GAP = 16;
 const MENU_CX = VERSUS_CANVAS_W / 2;
 const MENU_BY = CANVAS_H / 2 + 20;
-// Row 1: three non-admin buttons centred
+// Row 1: three non-admin mode buttons centred (still 3 wide, keep original feel)
 const MENU_ROW1_START = MENU_CX - (3 * BTN_W + 2 * BTN_GAP) / 2;
 export const MENU_SPRINT_BTN:   ButtonRect = { x: MENU_ROW1_START,                         y: MENU_BY, w: BTN_W, h: BTN_H };
 export const MENU_CREATIVE_BTN: ButtonRect = { x: MENU_ROW1_START + BTN_W + BTN_GAP,       y: MENU_BY, w: BTN_W, h: BTN_H };
 export const MENU_VERSUS_BTN:   ButtonRect = { x: MENU_ROW1_START + 2 * (BTN_W + BTN_GAP), y: MENU_BY, w: BTN_W, h: BTN_H };
-// Row 2: difficulty selection (shown instead of row 1 when picking versus difficulty)
+// Row 2: difficulty selection — 4 buttons in one row
 const MENU_ROW2_Y = MENU_BY + BTN_H + BTN_GAP;
 const MENU_ROW2_START = MENU_CX - (3 * BTN_W + 2 * BTN_GAP) / 2;
-export const MENU_DIFF_EASY_BTN:   ButtonRect = { x: MENU_ROW1_START,                         y: MENU_BY, w: BTN_W, h: BTN_H };
-export const MENU_DIFF_MEDIUM_BTN: ButtonRect = { x: MENU_ROW1_START + BTN_W + BTN_GAP,       y: MENU_BY, w: BTN_W, h: BTN_H };
-export const MENU_DIFF_HARD_BTN:   ButtonRect = { x: MENU_ROW1_START + 2 * (BTN_W + BTN_GAP), y: MENU_BY, w: BTN_W, h: BTN_H };
+const MENU_DIFF_ROW_START = MENU_CX - (4 * BTN_W + 3 * BTN_GAP) / 2;
+export const MENU_DIFF_EASY_BTN:         ButtonRect = { x: MENU_DIFF_ROW_START,                         y: MENU_BY, w: BTN_W, h: BTN_H };
+export const MENU_DIFF_MEDIUM_BTN:       ButtonRect = { x: MENU_DIFF_ROW_START + (BTN_W + BTN_GAP),     y: MENU_BY, w: BTN_W, h: BTN_H };
+export const MENU_DIFF_HARD_BTN:         ButtonRect = { x: MENU_DIFF_ROW_START + 2 * (BTN_W + BTN_GAP), y: MENU_BY, w: BTN_W, h: BTN_H };
+export const MENU_DIFF_EXPERIMENTAL_BTN: ButtonRect = { x: MENU_DIFF_ROW_START + 3 * (BTN_W + BTN_GAP), y: MENU_BY, w: BTN_W, h: BTN_H };
 // Row 3: three admin-only buttons centred
 export const MENU_WATCH_BTN:  ButtonRect = { x: MENU_ROW2_START,                         y: MENU_ROW2_Y, w: BTN_W, h: BTN_H };
 export const MENU_BVB_BTN:    ButtonRect = { x: MENU_ROW2_START + BTN_W + BTN_GAP,       y: MENU_ROW2_Y, w: BTN_W, h: BTN_H };
@@ -136,7 +138,7 @@ function drawLabel(
   y: number,
 ): void {
   ctx.fillStyle = LABEL_COLOR;
-  ctx.font = '11px monospace';
+  ctx.font = '12px monospace';
   ctx.textAlign = 'center';
   ctx.fillText(text, x, y);
 }
@@ -154,13 +156,14 @@ export function draw(
   bot1Name = 'BOT',
   bot2Name = 'BOT',
   keybindings: KeyBindings = DEFAULT_KEYBINDINGS,
+  cnnReady = false,
 ): void {
   // Background — fill the full (possibly wider) canvas
   ctx.fillStyle = BG_COLOR;
   ctx.fillRect(0, 0, VERSUS_CANVAS_W, CANVAS_H);
 
   if (state.mode === 'menu') {
-    drawMenu(ctx, customAiName, isAdmin, difficultyPending);
+    drawMenu(ctx, customAiName, isAdmin, difficultyPending, cnnReady);
     return;
   }
 
@@ -333,7 +336,7 @@ function drawNextQueue(ctx: CanvasRenderingContext2D, queue: PieceType[]): void 
 
 function drawHUDEntry(ctx: CanvasRenderingContext2D, label: string, value: string, x: number, y: number): void {
   ctx.fillStyle = LABEL_COLOR;
-  ctx.font = '11px monospace';
+  ctx.font = '12px monospace';
   ctx.textAlign = 'left';
   ctx.fillText(label, x, y);
   ctx.fillStyle = TEXT_COLOR;
@@ -342,12 +345,24 @@ function drawHUDEntry(ctx: CanvasRenderingContext2D, label: string, value: strin
 }
 
 function drawHints(ctx: CanvasRenderingContext2D, hints: string[]): void {
-  const hintY = CANVAS_H - 80;
-  ctx.fillStyle = LABEL_COLOR;
-  ctx.font = '10px monospace';
+  const lineH = 17;
+  const hintY = CANVAS_H - hints.length * lineH - 10;
+  ctx.font = '12px monospace';
   ctx.textAlign = 'left';
   for (let i = 0; i < hints.length; i++) {
-    ctx.fillText(hints[i], HOLD_X, hintY + i * 14);
+    const y = hintY + i * lineH;
+    const colonIdx = hints[i].indexOf(':');
+    if (colonIdx !== -1) {
+      const key    = hints[i].slice(0, colonIdx);
+      const action = hints[i].slice(colonIdx);
+      ctx.fillStyle = '#9999cc';
+      ctx.fillText(key, HOLD_X, y);
+      ctx.fillStyle = LABEL_COLOR;
+      ctx.fillText(action, HOLD_X + ctx.measureText(key).width, y);
+    } else {
+      ctx.fillStyle = LABEL_COLOR;
+      ctx.fillText(hints[i], HOLD_X, y);
+    }
   }
 }
 
@@ -393,7 +408,7 @@ function drawHUD(ctx: CanvasRenderingContext2D, state: GameState, versusData: Ve
     drawHUDEntry(ctx, 'LINES', String(state.lines), x, startY);
     const rewindCount = state.history.length;
     ctx.fillStyle = rewindCount > 0 ? LABEL_COLOR : '#333355';
-    ctx.font = '10px monospace';
+    ctx.font = '12px monospace';
     ctx.textAlign = 'left';
     ctx.fillText(`rewind  ${rewindCount}/${MAX_HISTORY}`, x, startY + 52);
     drawHints(ctx, [
@@ -461,7 +476,27 @@ function drawMenuButton(
   ctx.textAlign = 'center';
   ctx.fillText(label, r.x + r.w / 2, r.y + r.h / 2 - 4);
   ctx.fillStyle = LABEL_COLOR;
-  ctx.font = '10px monospace';
+  ctx.font = '11px monospace';
+  ctx.fillText(subtitle, r.x + r.w / 2, r.y + r.h / 2 + 14);
+}
+
+function drawMenuButtonDisabled(
+  ctx: CanvasRenderingContext2D,
+  r: ButtonRect,
+  label: string,
+  subtitle: string,
+): void {
+  ctx.fillStyle = '#0d0d1a';
+  ctx.fillRect(r.x, r.y, r.w, r.h);
+  ctx.strokeStyle = '#2a2a3a';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
+  ctx.fillStyle = '#3a3a55';
+  ctx.font = 'bold 14px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(label, r.x + r.w / 2, r.y + r.h / 2 - 4);
+  ctx.fillStyle = '#2a2a44';
+  ctx.font = '11px monospace';
   ctx.fillText(subtitle, r.x + r.w / 2, r.y + r.h / 2 + 14);
 }
 
@@ -526,7 +561,7 @@ function drawBvbResult(ctx: CanvasRenderingContext2D, winner: 'bot1' | 'bot2' | 
   ctx.fillText('R: rematch   Esc: menu', cx, cy + 20);
 }
 
-function drawMenu(ctx: CanvasRenderingContext2D, customAiName: string | null, isAdmin: boolean, difficultyPending: boolean): void {
+function drawMenu(ctx: CanvasRenderingContext2D, customAiName: string | null, isAdmin: boolean, difficultyPending: boolean, cnnReady = false): void {
   ctx.fillStyle = '#aaaaff';
   ctx.font = 'bold 52px monospace';
   ctx.textAlign = 'center';
@@ -539,6 +574,11 @@ function drawMenu(ctx: CanvasRenderingContext2D, customAiName: string | null, is
     drawMenuButton(ctx, MENU_DIFF_EASY_BTN,   'EASY',   '#66ffaa', 'greedy one-piece');
     drawMenuButton(ctx, MENU_DIFF_MEDIUM_BTN, 'MEDIUM', '#ffcc44', 'beam search');
     drawMenuButton(ctx, MENU_DIFF_HARD_BTN,   'HARD',   '#ff6666', 'beam search+');
+    if (cnnReady) {
+      drawMenuButton(ctx, MENU_DIFF_EXPERIMENTAL_BTN, 'EXPERIMENTAL', '#cc88ff', 'CNN eval');
+    } else {
+      drawMenuButtonDisabled(ctx, MENU_DIFF_EXPERIMENTAL_BTN, 'EXPERIMENTAL', 'loading...');
+    }
     ctx.fillStyle = LABEL_COLOR;
     ctx.font = '11px monospace';
     ctx.fillText('Esc to go back', MENU_CX, MENU_BY + BTN_H + 16);

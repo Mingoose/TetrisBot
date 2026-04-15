@@ -1,3 +1,5 @@
 node_modules/
 dist/
 .env.local
+# ONNX Runtime WASM binaries (copied from node_modules by prepare script)
+public/*.wasm

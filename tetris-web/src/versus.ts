@@ -222,7 +222,7 @@ export function requestBotMove(
   worker: Worker,
   bot: BotBoard,
   combat: CombatState,
-  aiParams?: { beamWidth: number; searchDepth: number; advancedEval?: boolean },
+  aiParams?: { beamWidth: number; searchDepth: number; advancedEval?: boolean; cnnEval?: boolean },
 ): void {
   const { pendingGarbage, combo, b2bActive } = combat;
   if (bot.pieceIndex >= 0) {

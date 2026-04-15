@@ -11,7 +11,7 @@ import { defineConfig } from 'vite';
 const SUPABASE_URL = 'https://imecxemhqauzmxvdsgfh.supabase.co';
 const CSP = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline'",  // unsafe-inline needed for Vite dev HMR
+  "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'",  // unsafe-inline for Vite HMR; wasm-unsafe-eval for ONNX Runtime WASM
   "style-src 'self' 'unsafe-inline'",
   "worker-src blob: 'self'",
   `connect-src 'self' ${SUPABASE_URL}`,
