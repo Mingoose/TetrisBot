@@ -21,6 +21,11 @@ export const AI_DIFFICULTY_PARAMS: Record<AiDifficulty, { beamWidth: number; sea
 // Always restored from a node's bagState before use.
 const searchBag = new Bag();
 
+// Well column persistence — survives between findBestMoveHard calls in the Web Worker.
+// Undefined until the first call; reset to undefined when a new game starts (empty board).
+let savedWellCol: number | undefined;
+const WELL_HYSTERESIS = 2; // min rows lower a new column must be before we switch wells
+
 // ---- BFS-based move generator ----
 
 interface PlacementResult {
@@ -300,7 +305,6 @@ const W = {
 
   // Board shape
   holes:            -0.80,  // per covered empty cell
-  overhangs:        -0.35,  // per filled cell directly above an empty cell
   bumpiness:        -0.28,  // per unit of adjacent height-diff (non-well, non-cliff)
   cliffThreshold:   3,      // diffs above this get an extra steep penalty (non-well only)
   cliffPenalty:     -1.00,  // extra penalty per unit of diff exceeding cliffThreshold
@@ -322,6 +326,12 @@ const W = {
   tslotBonus:       2.0,
   tetrisReadiness:  0.80, // reward per ready Tetris row (0→4 scale, 4 = four fully-open rows)
 
+  // Back-to-back state
+  b2bBonus:         0.50,  // flat reward for having B2B active after this placement
+
+  // Combo awareness
+  comboBonus:       0.35,  // reward per combo level (combo+1 when active, 0 when broken)
+
   // Combo potential
   comboPotential:   0.20,  // reward per nearly-full row (scaled by fill fraction above threshold)
 
@@ -340,13 +350,16 @@ function initHeightArray(): number[] {
 }
 
 // Choose a well column that the AI will commit to for the entire search.
-// Picks whichever column currently has the lowest height so the bot follows
-// the natural well that is already developing — including interior columns
-// useful for T-spin setups. Edge columns (9, then 0) win ties so an empty
-// board defaults to the right edge.
-function pickTargetWellCol(bm: Uint16Array): number {
+// If prevWellCol is supplied (from savedWellCol), sticks with it unless another
+// column is at least WELL_HYSTERESIS rows lower — preventing the well from
+// drifting every move as heights equalize. Edge columns (9, then 0) win ties
+// on a fresh pick so an empty board defaults to the right edge.
+function pickTargetWellCol(bm: Uint16Array, prevWellCol?: number): number {
   const heights = computeColumnHeightsBm(bm);
   const minH = Math.min(...heights);
+  if (prevWellCol !== undefined && heights[prevWellCol] <= minH + WELL_HYSTERESIS) {
+    return prevWellCol;
+  }
   if (heights[BOARD_COLS - 1] === minH) return BOARD_COLS - 1;
   if (heights[0] === minH) return 0;
   return heights.indexOf(minH);
@@ -401,7 +414,7 @@ function scoreTetrisReadiness(bm: Uint16Array, targetWellCol: number): number {
   let rowsChecked = 0;
 
   for (let r = BOARD_ROWS - 1; r >= 0 && rowsChecked < 4; r--) {
-    if (bm[r] & wellBit) continue; // well column blocked here — skip
+    if (bm[r] & wellBit) break; // well column blocked — contiguous streak ends here
     total += popcount10(bm[r]) / (BOARD_COLS - 1);
     rowsChecked++;
   }
@@ -781,6 +794,8 @@ export function evaluateBoard(
   landingHeight: number = 0,
   tInLookahead: boolean = true,
   preHeights?: number[],
+  combo: number = -1,
+  b2bActive: boolean = false,
 ): number {
   // Perfect clear: board is completely empty after this placement.
   let boardEmpty = true;
@@ -791,7 +806,6 @@ export function evaluateBoard(
   // the scan below never overwrites a column that already has a known height.
   const heights = preHeights ?? initHeightArray();
   let holes = 0;
-  let overhangs = 0;  // filled cells directly above an empty cell (Cold Clear's "overhang cells")
   let colTransitions = 0;
 
   for (let c = 0; c < BOARD_COLS; c++) {
@@ -811,8 +825,6 @@ export function evaluateBoard(
 
       if (filled) {
         if (!foundTop) { heights[c] = BOARD_ROWS - r; foundTop = true; }
-        // Overhang: this filled cell has an empty cell directly below it.
-        if (r + 1 < BOARD_ROWS && !(bm[r + 1] & colBit)) overhangs++;
         prevFilled = true;
       } else {
         if (foundTop) holes++; // covered empty cell = hole
@@ -901,7 +913,6 @@ export function evaluateBoard(
   let score = W.aggHeight       * penalisedHeight
             + lineClearScore
             + holePenalty       * holes
-            + W.overhangs       * overhangs
             + W.bumpiness       * bumpiness
             + W.cliffPenalty    * cliffPenalty
             + W.rowTransitions  * rowTransitions
@@ -922,6 +933,15 @@ export function evaluateBoard(
     score += W.garbageClearBonus * linesCleared * pendingGarbage;
     score += W.garbageUrgency    * pendingGarbage;
   }
+
+  // Back-to-back: flat bonus for having B2B active after this placement.
+  // Preserves the incentive to keep firing T-spins/Tetrises rather than breaking the streak.
+  if (b2bActive) score += W.b2bBonus;
+
+  // Combo streak: reward for having an active streak after this placement.
+  // combo >= 0 means at least one consecutive clear; scale linearly so longer streaks
+  // are more valuable (a 5-combo is worth ~2.1 extra, close to a Tetris).
+  if (combo >= 0) score += W.comboBonus * (combo + 1);
 
   // Combo potential: reward rows that are nearly full (8 or 9 filled cells).
   // Full rows excluded — they clear immediately and are already captured by lineClearScore.
@@ -1076,7 +1096,7 @@ function expandBeamNodeHardHard(node: BeamNodeHard, pendingGarbage: number): Bea
       const landingHeight = BOARD_ROWS - piece.y;
       const boardScore = evaluateBoard(
         clearedBoard, linesCleared, placement.isTSpin, pendingGarbage,
-        opt.pieceType, node.targetWellCol, landingHeight, tInLookahead, nextHeights,
+        opt.pieceType, node.targetWellCol, landingHeight, tInLookahead, nextHeights, nextCombo, nextB2b,
       );
 
       const firstMove = node.firstMove ?? {
@@ -1194,10 +1214,13 @@ export function findBestMoveHard(
   combo: number = -1,
   b2bActive: boolean = false,
 ): { rotationIndex: number; x: number; y: number; useHold: boolean } {
-  // Determine a stable well column from the current board state and commit to it for the
-  // entire search.  This prevents the well from jumping between columns mid-game.
   const rootBm = cellBoardToBm(bot.board);
-  const targetWellCol = pickTargetWellCol(rootBm);
+  const rootHeights = computeColumnHeightsBm(rootBm);
+
+  // Reset well persistence on a new game (empty board), then pick with hysteresis.
+  if (Math.max(...rootHeights) === 0) savedWellCol = undefined;
+  const targetWellCol = pickTargetWellCol(rootBm, savedWellCol);
+  savedWellCol = targetWellCol;
 
   let beam: BeamNodeHard[] = [{
     board: rootBm,
@@ -1211,7 +1234,7 @@ export function findBestMoveHard(
     combo,
     b2bActive,
     targetWellCol,
-    heights: computeColumnHeightsBm(rootBm),
+    heights: rootHeights,
     firstMove: null,
     movePath: null,
   }];
