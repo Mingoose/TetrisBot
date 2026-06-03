@@ -4,7 +4,6 @@ import { setupEditor } from './editor';
 import {
   draw, CANVAS_H, VERSUS_CANVAS_W,
   MENU_SPRINT_BTN, MENU_CREATIVE_BTN, MENU_VERSUS_BTN, MENU_WATCH_BTN, MENU_BVB_BTN, MENU_UPLOAD_BTN,
-  MENU_DIFF_EASY_BTN, MENU_DIFF_MEDIUM_BTN, MENU_DIFF_HARD_BTN, MENU_DIFF_EXPERIMENTAL_BTN,
 } from './renderer';
 import { AiDifficulty, AI_DIFFICULTY_PARAMS } from './ai';
 import { loadSettings } from './storage';
@@ -46,7 +45,6 @@ setupEditor(canvas, state);
 interface SavedAI { id: string; name: string; code: string; }
 
 let savedAIs: SavedAI[] = [];
-let selectedAiIndex = -2; // negative = built-in: -3=easy, -2=medium, -1=hard
 
 async function loadSavedAIs(): Promise<void> {
   const { data: { user } } = await supabase.auth.getUser();
@@ -81,31 +79,61 @@ async function deleteAI(index: number): Promise<void> {
   if (!ai) return;
   await supabase.from('user_ais').delete().eq('id', ai.id);
   savedAIs.splice(index, 1);
-  if (selectedAiIndex === index) selectedAiIndex = -2;
-  else if (selectedAiIndex > index) selectedAiIndex--;
 }
 
-function builtinDifficultyOf(index: number): AiDifficulty | null {
-  if (index === -3) return 'easy';
-  if (index === -2) return 'medium';
-  if (index === -1) return 'hard';
-  return null;
+// ---- AI selection types ----
+
+type AiSelection =
+  | { kind: 'builtin'; difficulty: AiDifficulty }
+  | { kind: 'custom'; index: number; name: string };
+
+function selLabel(sel: AiSelection): string {
+  return sel.kind === 'builtin' ? AI_DIFFICULTY_PARAMS[sel.difficulty].label : sel.name;
+}
+
+function selParams(sel: AiSelection): typeof AI_DIFFICULTY_PARAMS[AiDifficulty] | undefined {
+  return sel.kind === 'builtin' ? AI_DIFFICULTY_PARAMS[sel.difficulty] : undefined;
+}
+
+function createBlobWorker(code: string): Worker {
+  const networkBlock = `(function(){
+  const blocked = () => { throw new Error('Network access is blocked in AI workers'); };
+  Object.defineProperty(self, 'fetch',          { value: () => Promise.reject(blocked()), configurable: false, writable: false });
+  Object.defineProperty(self, 'XMLHttpRequest', { value: class { open(){blocked();} }, configurable: false, writable: false });
+  Object.defineProperty(self, 'WebSocket',      { value: class { constructor(){blocked();} }, configurable: false, writable: false });
+  Object.defineProperty(self, 'importScripts',  { value: blocked, configurable: false, writable: false });
+})();`;
+  const src = `${networkBlock}\n${code}\nself.onmessage=(e)=>{try{const{bot,pendingGarbage}=e.data;self.postMessage(getBestMove(bot,pendingGarbage));}catch(err){self.postMessage({error:String(err)});}};`;
+  const blob = new Blob([src], { type: 'application/javascript' });
+  const url = URL.createObjectURL(blob);
+  const w = new Worker(url);
+  URL.revokeObjectURL(url);
+  return w;
+}
+
+function workerForSel(sel: AiSelection): Worker {
+  if (sel.kind === 'custom' && sel.index >= 0 && sel.index < savedAIs.length) {
+    return createBlobWorker(savedAIs[sel.index].code);
+  }
+  return new Worker(new URL('./ai.worker.ts', import.meta.url), { type: 'module' });
 }
 
 // ---- Worker state ----
+
+let pressedBtn: import('./renderer').ButtonRect | null = null;
 
 let versusData: VersusData | null = null;
 let aiWorker: Worker | null = null;
 let customAiWorker: Worker | null = null;
 let customAiName: string | null = null;
-let customAiBlobUrl: string | null = null;
 let botMoveTimeout: ReturnType<typeof setTimeout> | null = null;
 let customAiError: string | null = null;
 let customAiWarning: string | null = null;
-let versusDifficulty: AiDifficulty = 'medium';
-let versusDifficultyPending = false;
-let bvbDifficulty: AiDifficulty = 'medium';
-let bvbDifficultyPending = false;
+const defaultSel: AiSelection = { kind: 'builtin', difficulty: 'medium' };
+let versusAiSel: AiSelection = { ...defaultSel };
+let watchAiSel: AiSelection = { ...defaultSel };
+let bvbAiSel1: AiSelection = { ...defaultSel };
+let bvbAiSel2: AiSelection = { ...defaultSel };
 let cnnReady = false;
 
 // ---- Engine analysis state ----
@@ -527,13 +555,8 @@ function wireWorker(w: Worker): void {
 
 function requestMoveWithTimeout(bot: BotBoard, combat: CombatState): void {
   const w = getAiWorker();
-  let aiParams: typeof AI_DIFFICULTY_PARAMS[AiDifficulty] | undefined;
-  if (!customAiWorker) {
-    const builtinDiff = builtinDifficultyOf(selectedAiIndex);
-    aiParams = state.variant === 'versus'
-      ? AI_DIFFICULTY_PARAMS[versusDifficulty]
-      : AI_DIFFICULTY_PARAMS[builtinDiff ?? 'medium'];
-  }
+  const sel = state.variant === 'versus' ? versusAiSel : watchAiSel;
+  const aiParams = customAiWorker ? undefined : selParams(sel);
   requestBotMove(w, bot, combat, aiParams);
   if (botMoveTimeout) clearTimeout(botMoveTimeout);
   botMoveTimeout = setTimeout(() => {
@@ -562,33 +585,6 @@ function requestMoveWithTimeout(bot: BotBoard, combat: CombatState): void {
 
 // Creates a blob worker from the selected saved AI (or clears to built-in).
 // Call this at every game start so the correct AI is active.
-function setupAiForGame(): void {
-  customAiWorker?.terminate();
-  customAiWorker = null;
-  customAiName = null;
-  if (customAiBlobUrl) { URL.revokeObjectURL(customAiBlobUrl); customAiBlobUrl = null; }
-  if (selectedAiIndex >= 0 && selectedAiIndex < savedAIs.length) {
-    const ai = savedAIs[selectedAiIndex];
-    // Neutralise all outbound network APIs before running user code.
-    // blob: workers are not subject to the page's connect-src CSP in Chrome,
-    // so we override them here as a reliable defence-in-depth measure.
-    const networkBlock = `
-(function(){
-  const blocked = () => { throw new Error('Network access is blocked in AI workers'); };
-  Object.defineProperty(self, 'fetch',          { value: () => Promise.reject(blocked()), configurable: false, writable: false });
-  Object.defineProperty(self, 'XMLHttpRequest', { value: class { open(){blocked();} }, configurable: false, writable: false });
-  Object.defineProperty(self, 'WebSocket',      { value: class { constructor(){blocked();} }, configurable: false, writable: false });
-  Object.defineProperty(self, 'importScripts',  { value: blocked, configurable: false, writable: false });
-})();`;
-    const src = `${networkBlock}\n${ai.code}\nself.onmessage=(e)=>{try{const{bot,pendingGarbage}=e.data;self.postMessage(getBestMove(bot,pendingGarbage));}catch(err){self.postMessage({error:String(err)});}};`;
-    const blob = new Blob([src], { type: 'application/javascript' });
-    customAiBlobUrl = URL.createObjectURL(blob);
-    customAiWorker = new Worker(customAiBlobUrl);
-    customAiWorker.onerror = (e) => console.warn('Custom AI worker error:', e.message);
-    customAiName = ai.name;
-  }
-}
-
 // Reinitialise game state while preserving the rAF handle.
 function restartState(variant: GameVariant): void {
   const handle = state.rafHandle;
@@ -605,63 +601,221 @@ function stopBvbWorkers(): void {
 
 function requestBvbBot1Move(bot: BotBoard, combat: CombatState): void {
   if (!bvbWorker1) return;
-  // Custom AI workers ignore difficulty params; built-in bot1 uses the AI manager selection.
-  const builtinDiff = builtinDifficultyOf(selectedAiIndex);
-  requestBotMove(bvbWorker1, bot, combat, customAiName ? undefined : AI_DIFFICULTY_PARAMS[builtinDiff ?? 'medium']);
-  if (bvbBot1Timeout) clearTimeout(bvbBot1Timeout);
-  if (customAiName) {
-    bvbBot1Timeout = setTimeout(() => {
-      bvbBot1Timeout = null;
-      customAiError = 'AI exceeded the 2 s time limit — game terminated';
-      customAiWarning = null;
-      if (botVsBotData) botVsBotData.bot1.dead = true;
-    }, 2000);
-  }
+  requestBotMove(bvbWorker1, bot, combat, selParams(bvbAiSel1));
 }
 
 function startBotVsBot(): void {
-  stopBvbWorkers(); // ensure any prior workers are cleaned up before creating new ones
+  stopBvbWorkers();
   customAiError = null;
   customAiWarning = null;
   botVsBotData = initBotVsBotData();
 
-  // Bot 1: use selected custom AI if any, otherwise a fresh built-in worker
-  setupAiForGame();
-  const bvbBot1IsCustom = !!customAiWorker;
-  if (customAiWorker) {
-    bvbWorker1 = customAiWorker;
-    customAiWorker = null; // bvbWorker1 now owns it
-  } else {
-    bvbWorker1 = new Worker(new URL('./ai.worker.ts', import.meta.url), { type: 'module' });
-  }
+  const bvbBot1IsCustom = bvbAiSel1.kind === 'custom';
+  const bvbBot2IsCustom = bvbAiSel2.kind === 'custom';
 
-  // Bot 2: always a fresh built-in worker instance
-  bvbWorker2 = new Worker(new URL('./ai.worker.ts', import.meta.url), { type: 'module' });
+  bvbWorker1 = workerForSel(bvbAiSel1);
+  bvbWorker2 = workerForSel(bvbAiSel2);
 
   bvbWorker1.onerror = (e) => console.error('BvB worker 1 error:', e.message);
   bvbWorker2.onerror = (e) => console.error('BvB worker 2 error:', e.message);
 
   bvbWorker1.onmessage = (e) => {
-    if (bvbBot1Timeout) { clearTimeout(bvbBot1Timeout); bvbBot1Timeout = null; }
     if (e.data?.error) {
-      console.warn('BvB worker 1 error:', e.data.error);
-      if (bvbBot1IsCustom) customAiError = `Runtime error: ${e.data.error}`;
+      if (bvbBot1IsCustom) customAiError = `Bot 1 runtime error: ${e.data.error}`;
       return;
     }
-    if (botVsBotData) {
-      if (isValidMove(e.data)) {
-        botVsBotData.pendingMove1 = e.data;
-      } else if (bvbBot1IsCustom) {
-        customAiError = 'getBestMove returned an invalid move object (expected { rotationIndex, x, y, useHold })';
-      }
-    }
+    if (botVsBotData && isValidMove(e.data)) botVsBotData.pendingMove1 = e.data;
+    else if (bvbBot1IsCustom && !customAiError) customAiError = 'Bot 1 getBestMove returned an invalid move object';
   };
   bvbWorker2.onmessage = (e) => {
+    if (e.data?.error) {
+      if (bvbBot2IsCustom && !customAiError) customAiError = `Bot 2 runtime error: ${e.data.error}`;
+      return;
+    }
     if (botVsBotData && isValidMove(e.data)) botVsBotData.pendingMove2 = e.data;
   };
 
   requestBvbBot1Move(botVsBotData.bot1, botVsBotData.bot1Combat);
-  requestBotMove(bvbWorker2, botVsBotData.bot2, botVsBotData.bot2Combat, AI_DIFFICULTY_PARAMS[bvbDifficulty]);
+  requestBotMove(bvbWorker2, botVsBotData.bot2, botVsBotData.bot2Combat, selParams(bvbAiSel2));
+}
+
+// ---- Game start helpers ----
+
+function startVersusGame(): void {
+  customAiError = null;
+  customAiWarning = null;
+  customAiWorker?.terminate();
+  customAiWorker = null;
+  customAiName = null;
+  if (versusAiSel.kind === 'custom') {
+    customAiWorker = workerForSel(versusAiSel);
+    customAiWorker.onerror = (e) => console.warn('Custom AI worker error:', e.message);
+    customAiName = versusAiSel.name;
+  }
+  restartState('versus');
+  versusData = initVersusData(state);
+  setupPlayerLockHook(versusData);
+  wireWorker(getAiWorker());
+  requestMoveWithTimeout(versusData.bot, versusData.botCombat);
+  startVersusRecording();
+}
+
+function startWatchGame(): void {
+  customAiError = null;
+  customAiWarning = null;
+  customAiWorker?.terminate();
+  customAiWorker = null;
+  customAiName = null;
+  if (watchAiSel.kind === 'custom') {
+    customAiWorker = workerForSel(watchAiSel);
+    customAiWorker.onerror = (e) => console.warn('Custom AI worker error:', e.message);
+    customAiName = watchAiSel.name;
+  }
+  restartState('watch');
+  versusData = initVersusData();
+  setLockHook(null);
+  wireWorker(getAiWorker());
+  requestMoveWithTimeout(versusData.bot, versusData.botCombat);
+}
+
+// ---- AI picker overlay ----
+
+let aiPickerCallback: ((sel: AiSelection) => void) | null = null;
+
+function openAiPicker(title: string, current: AiSelection, onSelect: (sel: AiSelection) => void): void {
+  document.getElementById('ai-picker-title')!.textContent = title;
+  aiPickerCallback = onSelect;
+  renderAiPickerList(current);
+  document.getElementById('ai-picker')!.style.display = 'flex';
+  canvas.blur();
+}
+
+function closeAiPicker(): void {
+  aiPickerCallback = null;
+  document.getElementById('ai-picker')!.style.display = 'none';
+  if (document.getElementById('bvb-setup')!.style.display === 'none') canvas.focus();
+}
+
+function renderAiPickerList(current: AiSelection): void {
+  const list = document.getElementById('ai-picker-list')!;
+  list.innerHTML = '';
+
+  const builtins: Array<{ difficulty: AiDifficulty; label: string; subtitle: string }> = [
+    { difficulty: 'easy',         label: 'Easy',         subtitle: 'greedy one-piece' },
+    { difficulty: 'medium',       label: 'Medium',       subtitle: 'beam search' },
+    { difficulty: 'hard',         label: 'Hard',         subtitle: 'beam search+' },
+    { difficulty: 'experimental', label: 'Experimental', subtitle: 'CNN eval' },
+  ];
+
+  const builtinHeader = document.createElement('div');
+  builtinHeader.className = 'ai-section-header';
+  builtinHeader.textContent = 'BUILT-IN';
+  list.appendChild(builtinHeader);
+
+  for (const b of builtins) {
+    const isSelected = current.kind === 'builtin' && current.difficulty === b.difficulty;
+    const disabled = b.difficulty === 'experimental' && !cnnReady;
+    const item = document.createElement('div');
+    item.className = 'ai-item' + (isSelected ? ' selected' : '') + (disabled ? '' : ' clickable');
+    if (disabled) item.style.opacity = '0.4';
+
+    const nameEl = document.createElement('div');
+    nameEl.className = 'ai-name';
+    nameEl.textContent = b.label;
+
+    const sub = document.createElement('div');
+    sub.className = 'ai-badge';
+    sub.textContent = b.subtitle;
+
+    item.appendChild(nameEl);
+    item.appendChild(sub);
+
+    if (!disabled) {
+      item.addEventListener('click', () => {
+        const sel: AiSelection = { kind: 'builtin', difficulty: b.difficulty };
+        aiPickerCallback?.(sel);
+        closeAiPicker();
+      });
+    }
+    list.appendChild(item);
+  }
+
+  if (savedAIs.length > 0) {
+    const customHeader = document.createElement('div');
+    customHeader.className = 'ai-section-header';
+    customHeader.textContent = 'CUSTOM';
+    list.appendChild(customHeader);
+
+    savedAIs.forEach((ai, i) => {
+      const isSelected = current.kind === 'custom' && current.index === i;
+      const item = document.createElement('div');
+      item.className = 'ai-item clickable' + (isSelected ? ' selected' : '');
+
+      const nameEl = document.createElement('div');
+      nameEl.className = 'ai-name';
+      nameEl.textContent = ai.name;
+      nameEl.title = ai.name;
+
+      const badge = document.createElement('div');
+      badge.className = 'ai-badge';
+      badge.textContent = 'CUSTOM';
+
+      item.appendChild(nameEl);
+      item.appendChild(badge);
+      item.addEventListener('click', () => {
+        const sel: AiSelection = { kind: 'custom', index: i, name: ai.name };
+        aiPickerCallback?.(sel);
+        closeAiPicker();
+      });
+      list.appendChild(item);
+    });
+  }
+}
+
+// ---- BvB setup overlay ----
+
+function openBvbSetup(): void {
+  renderBvbSetup();
+  document.getElementById('bvb-setup')!.style.display = 'flex';
+  canvas.blur();
+}
+
+function closeBvbSetup(): void {
+  document.getElementById('bvb-setup')!.style.display = 'none';
+  canvas.focus();
+}
+
+function renderBvbSetup(): void {
+  const body = document.getElementById('bvb-setup-body')!;
+  body.innerHTML = '';
+
+  const sels: [AiSelection, (s: AiSelection) => void, string][] = [
+    [bvbAiSel1, (s) => { bvbAiSel1 = s; }, 'BOT 1'],
+    [bvbAiSel2, (s) => { bvbAiSel2 = s; }, 'BOT 2'],
+  ];
+
+  for (const [sel, setSel, label] of sels) {
+    const row = document.createElement('div');
+    row.className = 'bvb-slot-row';
+
+    const labelEl = document.createElement('div');
+    labelEl.className = 'bvb-slot-label';
+    labelEl.textContent = label;
+
+    const btn = document.createElement('button');
+    btn.className = 'bvb-slot-btn';
+    btn.textContent = selLabel(sel) + ' ▾';
+    btn.addEventListener('click', () => {
+      openAiPicker(label + ' AI', sel, (newSel) => {
+        setSel(newSel);
+        renderBvbSetup();
+      });
+    });
+
+    row.appendChild(labelEl);
+    row.appendChild(btn);
+    body.appendChild(row);
+  }
 }
 
 // ---- AI manager overlay ----
@@ -670,55 +824,40 @@ function renderAiList(): void {
   const list = document.getElementById('ai-list')!;
   list.innerHTML = '';
 
-  // Built-in rows
-  list.appendChild(makeAiRow(-3, 'Easy',   'BUILT-IN', false));
-  list.appendChild(makeAiRow(-2, 'Medium', 'BUILT-IN', false));
-  list.appendChild(makeAiRow(-1, 'Hard',   'BUILT-IN', false));
+  if (savedAIs.length === 0) {
+    const empty = document.createElement('div');
+    empty.style.cssText = 'padding: 20px; color: #444466; font-size: 12px; text-align: center;';
+    empty.textContent = 'No AIs uploaded yet';
+    list.appendChild(empty);
+    return;
+  }
 
-  // Saved AI rows
   savedAIs.forEach((ai, i) => {
-    list.appendChild(makeAiRow(i, ai.name, 'CUSTOM', true));
-  });
-}
+    const item = document.createElement('div');
+    item.className = 'ai-item';
 
-function makeAiRow(index: number, name: string, badge: string, deletable: boolean): HTMLElement {
-  const item = document.createElement('div');
-  item.className = 'ai-item' + (selectedAiIndex === index ? ' selected' : '');
+    const nameEl = document.createElement('div');
+    nameEl.className = 'ai-name';
+    nameEl.textContent = ai.name;
+    nameEl.title = ai.name;
 
-  const radio = document.createElement('div');
-  radio.className = 'ai-radio';
+    const badgeEl = document.createElement('div');
+    badgeEl.className = 'ai-badge';
+    badgeEl.textContent = 'CUSTOM';
 
-  const nameEl = document.createElement('div');
-  nameEl.className = 'ai-name';
-  nameEl.textContent = name;
-  nameEl.title = name;
-
-  const badgeEl = document.createElement('div');
-  badgeEl.className = 'ai-badge';
-  badgeEl.textContent = badge;
-
-  item.appendChild(radio);
-  item.appendChild(nameEl);
-  item.appendChild(badgeEl);
-
-  if (deletable) {
     const del = document.createElement('button');
     del.className = 'ai-delete';
     del.textContent = 'DEL';
-    del.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      await deleteAI(index);
+    del.addEventListener('click', async () => {
+      await deleteAI(i);
       renderAiList();
     });
+
+    item.appendChild(nameEl);
+    item.appendChild(badgeEl);
     item.appendChild(del);
-  }
-
-  item.addEventListener('click', () => {
-    selectedAiIndex = index;
-    renderAiList();
+    list.appendChild(item);
   });
-
-  return item;
 }
 
 async function openAiManager(): Promise<void> {
@@ -741,9 +880,7 @@ document.getElementById('ai-upload')!.addEventListener('change', (e) => {
   const reader = new FileReader();
   reader.onload = async (ev) => {
     const code = ev.target!.result as string;
-    const existingIdx = savedAIs.findIndex(a => a.name === file.name);
     await uploadAI(file.name, code);
-    selectedAiIndex = existingIdx >= 0 ? existingIdx : savedAIs.length - 1;
     renderAiList();
   };
   reader.onerror = () => {
@@ -760,15 +897,22 @@ document.getElementById('ai-manager')!.addEventListener('click', (e) => {
   if (e.target === e.currentTarget) closeAiManager();
 });
 
+document.getElementById('bvb-cancel-btn')!.addEventListener('click', closeBvbSetup);
+document.getElementById('bvb-start-btn')!.addEventListener('click', () => {
+  closeBvbSetup();
+  customAiError = null;
+  customAiWarning = null;
+  restartState('botvsbot');
+  startBotVsBot();
+});
+
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && document.getElementById('ai-manager')!.style.display !== 'none') {
-    closeAiManager();
-  }
-  if (e.key === 'Escape' && versusDifficultyPending) {
-    versusDifficultyPending = false;
-  }
-  if (e.key === 'Escape' && bvbDifficultyPending) {
-    bvbDifficultyPending = false;
+  const picker = document.getElementById('ai-picker')!;
+  const bvbSetupEl = document.getElementById('bvb-setup')!;
+  if (e.key === 'Escape') {
+    if (picker.style.display !== 'none') { closeAiPicker(); return; }
+    if (bvbSetupEl.style.display !== 'none') { closeBvbSetup(); return; }
+    if (document.getElementById('ai-manager')!.style.display !== 'none') { closeAiManager(); return; }
   }
 });
 
@@ -783,6 +927,25 @@ canvas.addEventListener('click', (e) => {
     toggleGrBestMove();
   }
 });
+
+// Track pressed canvas button for press animation
+canvas.addEventListener('mousedown', (e) => {
+  const rect = canvas.getBoundingClientRect();
+  const mx = (e.clientX - rect.left) * (VERSUS_CANVAS_W / rect.width);
+  const my = (e.clientY - rect.top)  * (CANVAS_H / rect.height);
+  const hit = (b: { x: number; y: number; w: number; h: number }) =>
+    mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h;
+  if (state.mode === 'menu') {
+    for (const btn of [MENU_SPRINT_BTN, MENU_CREATIVE_BTN, MENU_VERSUS_BTN, MENU_WATCH_BTN, MENU_BVB_BTN, MENU_UPLOAD_BTN]) {
+      if (hit(btn)) { pressedBtn = btn; return; }
+    }
+  }
+  if ((sprintGameReviewMode || versusGameReviewMode) && hit(GAME_REVIEW_BTN)) {
+    pressedBtn = GAME_REVIEW_BTN;
+  }
+});
+canvas.addEventListener('mouseup',    () => { pressedBtn = null; });
+canvas.addEventListener('mouseleave', () => { pressedBtn = null; });
 
 // Menu click handler — hit-test against exported button rects
 canvas.addEventListener('click', (e) => {
@@ -800,67 +963,34 @@ canvas.addEventListener('click', (e) => {
   }
 
   if (hit(MENU_BVB_BTN) && isAdmin) {
-    bvbDifficultyPending = true;
+    loadSavedAIs().then(() => openBvbSetup());
     return;
   }
 
-  // Difficulty selection screen (shared by versus and bot-vs-bot)
-  if (versusDifficultyPending) {
-    let chosen: AiDifficulty | null = null;
-    if (hit(MENU_DIFF_EASY_BTN))                          chosen = 'easy';
-    if (hit(MENU_DIFF_MEDIUM_BTN))                        chosen = 'medium';
-    if (hit(MENU_DIFF_HARD_BTN))                          chosen = 'hard';
-    if (hit(MENU_DIFF_EXPERIMENTAL_BTN) && cnnReady)      chosen = 'experimental';
-    if (!chosen) return;
-    versusDifficulty = chosen;
-    versusDifficultyPending = false;
-    customAiError = null;
-    customAiWarning = null;
-    restartState('versus');
-    versusData = initVersusData(state);
-    setupPlayerLockHook(versusData);
-    setupAiForGame();
-    wireWorker(getAiWorker());
-    requestMoveWithTimeout(versusData.bot, versusData.botCombat);
-    startVersusRecording();
-    return;
-  }
-
-  if (bvbDifficultyPending) {
-    let chosen: AiDifficulty | null = null;
-    if (hit(MENU_DIFF_EASY_BTN))                          chosen = 'easy';
-    if (hit(MENU_DIFF_MEDIUM_BTN))                        chosen = 'medium';
-    if (hit(MENU_DIFF_HARD_BTN))                          chosen = 'hard';
-    if (hit(MENU_DIFF_EXPERIMENTAL_BTN) && cnnReady)      chosen = 'experimental';
-    if (!chosen) return;
-    bvbDifficulty = chosen;
-    bvbDifficultyPending = false;
-    customAiError = null;
-    customAiWarning = null;
-    restartState('botvsbot');
-    startBotVsBot();
+  if (hit(MENU_WATCH_BTN) && isAdmin) {
+    loadSavedAIs().then(() => openAiPicker('WATCH AI', watchAiSel, (sel) => {
+      watchAiSel = sel;
+      startWatchGame();
+    }));
     return;
   }
 
   let variant: GameVariant | null = null;
   if (hit(MENU_SPRINT_BTN))   variant = 'sprint';
   if (hit(MENU_CREATIVE_BTN)) variant = 'creative';
-  if (hit(MENU_VERSUS_BTN))   { versusDifficultyPending = true; return; }
-  if (hit(MENU_WATCH_BTN) && isAdmin) variant = 'watch';
+  if (hit(MENU_VERSUS_BTN)) {
+    loadSavedAIs().then(() => openAiPicker('VERSUS AI', versusAiSel, (sel) => {
+      versusAiSel = sel;
+      startVersusGame();
+    }));
+    return;
+  }
   if (!variant) return;
 
   restartState(variant);
 
   if (variant === 'sprint') {
     startSprintRecording();
-  } else if (variant === 'watch') {
-    customAiError = null;
-    customAiWarning = null;
-    versusData = initVersusData();
-    setLockHook(null);
-    setupAiForGame();
-    wireWorker(getAiWorker());
-    requestMoveWithTimeout(versusData.bot, versusData.botCombat);
   } else {
     versusData = null;
     setLockHook(null);
@@ -901,8 +1031,13 @@ async function startGame(userId: string): Promise<void> {
       cursor: 'pointer',
       zIndex: '10',
     });
-    signOutBtn.addEventListener('mouseover', () => { signOutBtn.style.background = '#2a2a4a'; });
-    signOutBtn.addEventListener('mouseout',  () => { signOutBtn.style.background = '#1e1e3a'; });
+    signOutBtn.style.transition = 'transform 60ms ease-out, background 80ms ease-out, opacity 60ms ease-out';
+    signOutBtn.addEventListener('mouseover',  () => { signOutBtn.style.background = '#2a2a4a'; });
+    signOutBtn.addEventListener('mouseout',   () => { signOutBtn.style.background = '#1e1e3a'; });
+    signOutBtn.addEventListener('mousedown',  () => { signOutBtn.style.transform = 'scale(0.94)'; signOutBtn.style.opacity = '0.72'; });
+    const resetSignOut = () => { signOutBtn.style.transform = ''; signOutBtn.style.opacity = ''; };
+    signOutBtn.addEventListener('mouseup',    resetSignOut);
+    signOutBtn.addEventListener('mouseleave', resetSignOut);
     signOutBtn.addEventListener('click', async () => {
       await supabase.auth.signOut();
       window.location.reload();
@@ -920,7 +1055,6 @@ async function startGame(userId: string): Promise<void> {
       customAiWorker?.terminate();
       customAiWorker = null;
       customAiName = null;
-      if (customAiBlobUrl) { URL.revokeObjectURL(customAiBlobUrl); customAiBlobUrl = null; }
     }
     if (botVsBotData !== null && state.mode === 'menu') {
       stopBvbWorkers();
@@ -1192,7 +1326,7 @@ async function startGame(userId: string): Promise<void> {
         grAnimLastAdvance = 0;
       }
 
-      drawGameReviewScreen(ctx, latestSprintReplay, grMoveIdx, grClassification, grShowBestMove, timestamp);
+      drawGameReviewScreen(ctx, latestSprintReplay, grMoveIdx, grClassification, grShowBestMove, timestamp, pressedBtn);
       if (grShowBestMove) drawEngineOverlay(ctx, grAnalysis, grSelectedLine, grBoardStates, grAnimFrame, timestamp);
       flushInput(input);
       state.rafHandle = requestAnimationFrame(gameLoop);
@@ -1267,7 +1401,7 @@ async function startGame(userId: string): Promise<void> {
         grAnimLastAdvance = 0;
       }
 
-      drawVersusGameReviewScreen(ctx, grVersusEntries, grMoveIdx, grClassification, grShowBestMove, timestamp);
+      drawVersusGameReviewScreen(ctx, grVersusEntries, grMoveIdx, grClassification, grShowBestMove, timestamp, pressedBtn);
       if (grShowBestMove) drawEngineOverlay(ctx, grAnalysis, grSelectedLine, grBoardStates, grAnimFrame, timestamp);
       flushInput(input);
       state.rafHandle = requestAnimationFrame(gameLoop);
@@ -1283,7 +1417,6 @@ async function startGame(userId: string): Promise<void> {
           customAiError = null;
           customAiWarning = null;
           versusData = initVersusData();
-          setupAiForGame();
           wireWorker(getAiWorker());
           requestMoveWithTimeout(versusData.bot, versusData.botCombat);
         } else if (state.variant === 'botvsbot') {
@@ -1350,7 +1483,6 @@ async function startGame(userId: string): Promise<void> {
         if (wasLastFrameTime !== 0 && state.lastFrameTime === 0) {
           versusData = initVersusData(state);
           setupPlayerLockHook(versusData);
-          setupAiForGame();
           wireWorker(getAiWorker());
           requestMoveWithTimeout(versusData.bot, versusData.botCombat);
           startVersusRecording();
@@ -1465,8 +1597,7 @@ async function startGame(userId: string): Promise<void> {
       }
       if (!botVsBotData.bot1.dead && !botVsBotData.pendingMove1 &&
           botVsBotData.bot1ThinkAccumMs >= msPerPiece && !customAiWarning && !customAiError) {
-        const bot1Label = customAiName ?? AI_DIFFICULTY_PARAMS[builtinDifficultyOf(selectedAiIndex) ?? 'medium'].label;
-        customAiWarning = `Bot 1 (${bot1Label}) is too slow for ${settings.botPps} PPS — reduce PPS in settings`;
+        customAiWarning = `Bot 1 (${selLabel(bvbAiSel1)}) is too slow for ${settings.botPps} PPS — reduce PPS in settings`;
       }
 
       while (botVsBotData.bot2ThinkAccumMs >= msPerPiece && !botVsBotData.bot2.dead) {
@@ -1475,11 +1606,11 @@ async function startGame(userId: string): Promise<void> {
         const m = botVsBotData.pendingMove2; botVsBotData.pendingMove2 = null;
         applyBotMove(m, botVsBotData.bot2, botVsBotData.bot2Combat, botVsBotData.bot1Combat);
         if (!botVsBotData.bot2.dead && bvbWorker2)
-          requestBotMove(bvbWorker2, botVsBotData.bot2, botVsBotData.bot2Combat, AI_DIFFICULTY_PARAMS[bvbDifficulty]);
+          requestBotMove(bvbWorker2, botVsBotData.bot2, botVsBotData.bot2Combat, selParams(bvbAiSel2));
       }
       if (!botVsBotData.bot2.dead && !botVsBotData.pendingMove2 &&
           botVsBotData.bot2ThinkAccumMs >= msPerPiece && !customAiWarning && !customAiError) {
-        customAiWarning = `Bot 2 (${AI_DIFFICULTY_PARAMS[bvbDifficulty].label}) is too slow for ${settings.botPps} PPS — reduce PPS in settings`;
+        customAiWarning = `Bot 2 (${selLabel(bvbAiSel2)}) is too slow for ${settings.botPps} PPS — reduce PPS in settings`;
       }
 
       // Winner detection
@@ -1493,13 +1624,11 @@ async function startGame(userId: string): Promise<void> {
     }
 
     // Compute display names for bot labels in versus/watch/BvB.
-    const builtinDiff = builtinDifficultyOf(selectedAiIndex);
-    const managerBotName = customAiName ?? AI_DIFFICULTY_PARAMS[builtinDiff ?? 'medium'].label;
-    const bot1Name = state.variant === 'versus'
-      ? (customAiName ?? AI_DIFFICULTY_PARAMS[versusDifficulty].label)
-      : managerBotName;
-    const bot2Name = AI_DIFFICULTY_PARAMS[bvbDifficulty].label;
-    draw(ctx, state, versusData, customAiName, botVsBotData, isAdmin, customAiError, customAiWarning, versusDifficultyPending || bvbDifficultyPending, bot1Name, bot2Name, settings.keybindings, cnnReady);
+    const bot1Name = state.variant === 'versus' ? selLabel(versusAiSel)
+      : state.variant === 'watch' ? selLabel(watchAiSel)
+      : selLabel(bvbAiSel1);
+    const bot2Name = selLabel(bvbAiSel2);
+    draw(ctx, state, versusData, botVsBotData, isAdmin, customAiError, customAiWarning, bot1Name, bot2Name, settings.keybindings, cnnReady, pressedBtn);
     if (engineMode && state.mode === 'paused' && state.variant === 'creative') {
       if (engineAnalysis && engineBoardStates.length > 1) {
         const moveCount = engineBoardStates.length - 1;

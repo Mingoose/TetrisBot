@@ -55,20 +55,9 @@
       display: flex;
       align-items: center;
       padding: 10px 20px;
-      cursor: pointer;
       border-bottom: 1px solid #1a1a32;
       gap: 12px;
     }
-    .ai-item:hover { background: #1a1a38; }
-    .ai-item.selected { background: #1c1c42; }
-    .ai-radio {
-      width: 13px;
-      height: 13px;
-      border-radius: 50%;
-      border: 2px solid #444466;
-      flex-shrink: 0;
-    }
-    .ai-item.selected .ai-radio { border-color: #aaaaff; background: #aaaaff; }
     .ai-name {
       flex: 1;
       color: #aaaacc;
@@ -77,7 +66,6 @@
       text-overflow: ellipsis;
       white-space: nowrap;
     }
-    .ai-item.selected .ai-name { color: #ffffff; }
     .ai-badge {
       font-size: 10px;
       color: #555577;
@@ -86,7 +74,6 @@
       flex-shrink: 0;
       letter-spacing: 1px;
     }
-    .ai-item.selected .ai-badge { color: #8888cc; border-color: #3a3a6a; }
     .ai-delete {
       background: none;
       border: 1px solid #442222;
@@ -204,6 +191,84 @@
       border-radius: 3px;
     }
     .ai-info-btn:hover { background: #22224a; border-color: #7777dd; color: #ccccff; }
+
+    /* AI picker overlay */
+    #ai-picker {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.82);
+      z-index: 11;
+      justify-content: center;
+      align-items: center;
+    }
+    /* BvB setup overlay */
+    #bvb-setup {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.82);
+      z-index: 10;
+      justify-content: center;
+      align-items: center;
+    }
+    .ai-item.clickable { cursor: pointer; transition: background 60ms ease-out; }
+    .ai-item.clickable:hover { background: #1a1a38; }
+    .ai-item.clickable:active { background: #252548 !important; }
+    .ai-item.selected { background: #1c1c42; }
+    .ai-item.selected .ai-name { color: #ffffff; }
+    .ai-section-header {
+      padding: 6px 20px 3px;
+      font-size: 10px;
+      color: #444466;
+      letter-spacing: 2px;
+    }
+    .bvb-slot-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .bvb-slot-label {
+      color: #888899;
+      font-size: 11px;
+      letter-spacing: 1px;
+      width: 50px;
+      flex-shrink: 0;
+    }
+    .bvb-slot-btn {
+      flex: 1;
+      background: #14142a;
+      border: 1px solid #333355;
+      color: #aaaacc;
+      font-family: monospace;
+      font-size: 13px;
+      padding: 9px 14px;
+      cursor: pointer;
+      text-align: left;
+    }
+    .bvb-slot-btn:hover { background: #1c1c3a; border-color: #5555aa; color: #ccccee; }
+    .bvb-start-btn {
+      flex: 1;
+      background: #0e1e0e;
+      border: 1px solid #2a4a2a;
+      color: #55aa55;
+      font-family: monospace;
+      font-size: 12px;
+      padding: 9px 22px;
+      cursor: pointer;
+    }
+    .bvb-start-btn:hover { background: #162616; border-color: #448844; color: #88cc88; }
+
+    /* Button press animations */
+    .ai-done-btn, .ai-upload-label, .ai-delete, .bvb-slot-btn, .bvb-start-btn,
+    .auth-submit, .ai-info-btn {
+      transition: transform 60ms ease-out, opacity 60ms ease-out;
+      user-select: none;
+    }
+    .ai-done-btn:active, .ai-upload-label:active, .ai-delete:active,
+    .bvb-slot-btn:active, .bvb-start-btn:active, .auth-submit:active, .ai-info-btn:active {
+      transform: scale(0.94);
+      opacity: 0.72;
+    }
+    .auth-toggle span { transition: color 80ms ease-out; }
   </style>
 </head>
 <body>
@@ -235,6 +300,24 @@
           <input id="ai-upload" type="file" accept=".js" style="display:none">
         </label>
         <button class="ai-done-btn" id="ai-done-btn">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="ai-picker" style="display:none">
+    <div class="ai-panel" style="width:360px">
+      <div class="ai-panel-header"><span id="ai-picker-title">CHOOSE AI</span></div>
+      <div class="ai-list" id="ai-picker-list" style="max-height:400px"></div>
+    </div>
+  </div>
+
+  <div id="bvb-setup" style="display:none">
+    <div class="ai-panel" style="width:380px">
+      <div class="ai-panel-header">BOT VS BOT</div>
+      <div id="bvb-setup-body" style="padding:20px 20px 8px;display:flex;flex-direction:column;gap:14px;"></div>
+      <div class="ai-panel-footer">
+        <button class="ai-done-btn" id="bvb-cancel-btn">Cancel</button>
+        <button class="bvb-start-btn" id="bvb-start-btn">START</button>
       </div>
     </div>
   </div>

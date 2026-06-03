@@ -46,15 +46,9 @@ const MENU_ROW1_START = MENU_CX - (3 * BTN_W + 2 * BTN_GAP) / 2;
 export const MENU_SPRINT_BTN:   ButtonRect = { x: MENU_ROW1_START,                         y: MENU_BY, w: BTN_W, h: BTN_H };
 export const MENU_CREATIVE_BTN: ButtonRect = { x: MENU_ROW1_START + BTN_W + BTN_GAP,       y: MENU_BY, w: BTN_W, h: BTN_H };
 export const MENU_VERSUS_BTN:   ButtonRect = { x: MENU_ROW1_START + 2 * (BTN_W + BTN_GAP), y: MENU_BY, w: BTN_W, h: BTN_H };
-// Row 2: difficulty selection — 4 buttons in one row
+// Row 2: three admin-only buttons centred
 const MENU_ROW2_Y = MENU_BY + BTN_H + BTN_GAP;
 const MENU_ROW2_START = MENU_CX - (3 * BTN_W + 2 * BTN_GAP) / 2;
-const MENU_DIFF_ROW_START = MENU_CX - (4 * BTN_W + 3 * BTN_GAP) / 2;
-export const MENU_DIFF_EASY_BTN:         ButtonRect = { x: MENU_DIFF_ROW_START,                         y: MENU_BY, w: BTN_W, h: BTN_H };
-export const MENU_DIFF_MEDIUM_BTN:       ButtonRect = { x: MENU_DIFF_ROW_START + (BTN_W + BTN_GAP),     y: MENU_BY, w: BTN_W, h: BTN_H };
-export const MENU_DIFF_HARD_BTN:         ButtonRect = { x: MENU_DIFF_ROW_START + 2 * (BTN_W + BTN_GAP), y: MENU_BY, w: BTN_W, h: BTN_H };
-export const MENU_DIFF_EXPERIMENTAL_BTN: ButtonRect = { x: MENU_DIFF_ROW_START + 3 * (BTN_W + BTN_GAP), y: MENU_BY, w: BTN_W, h: BTN_H };
-// Row 3: three admin-only buttons centred
 export const MENU_WATCH_BTN:  ButtonRect = { x: MENU_ROW2_START,                         y: MENU_ROW2_Y, w: BTN_W, h: BTN_H };
 export const MENU_BVB_BTN:    ButtonRect = { x: MENU_ROW2_START + BTN_W + BTN_GAP,       y: MENU_ROW2_Y, w: BTN_W, h: BTN_H };
 export const MENU_UPLOAD_BTN: ButtonRect = { x: MENU_ROW2_START + 2 * (BTN_W + BTN_GAP), y: MENU_ROW2_Y, w: BTN_W, h: BTN_H };
@@ -147,23 +141,22 @@ export function draw(
   ctx: CanvasRenderingContext2D,
   state: GameState,
   versusData?: VersusData | null,
-  customAiName: string | null = null,
   botVsBotData?: BotVsBotData | null,
   isAdmin = false,
   customAiError: string | null = null,
   customAiWarning: string | null = null,
-  difficultyPending = false,
   bot1Name = 'BOT',
   bot2Name = 'BOT',
   keybindings: KeyBindings = DEFAULT_KEYBINDINGS,
-  cnnReady = false,
+  _cnnReady = false,
+  pressedBtn: ButtonRect | null = null,
 ): void {
   // Background — fill the full (possibly wider) canvas
   ctx.fillStyle = BG_COLOR;
   ctx.fillRect(0, 0, VERSUS_CANVAS_W, CANVAS_H);
 
   if (state.mode === 'menu') {
-    drawMenu(ctx, customAiName, isAdmin, difficultyPending, cnnReady);
+    drawMenu(ctx, isAdmin, pressedBtn);
     return;
   }
 
@@ -465,40 +458,23 @@ function drawMenuButton(
   label: string,
   color: string,
   subtitle: string,
+  selected = false,
+  pressed = false,
 ): void {
-  ctx.fillStyle = PANEL_BG;
+  ctx.fillStyle = pressed ? color + '44' : selected ? color + '22' : PANEL_BG;
   ctx.fillRect(r.x, r.y, r.w, r.h);
-  ctx.strokeStyle = color + '88';
-  ctx.lineWidth = 1;
+  ctx.strokeStyle = pressed || selected ? color : color + '88';
+  ctx.lineWidth = pressed || selected ? 2 : 1;
   ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
   ctx.fillStyle = color;
   ctx.font = 'bold 18px monospace';
   ctx.textAlign = 'center';
-  ctx.fillText(label, r.x + r.w / 2, r.y + r.h / 2 - 4);
+  ctx.fillText(label, r.x + r.w / 2, r.y + r.h / 2 + (pressed ? -3 : -4));
   ctx.fillStyle = LABEL_COLOR;
   ctx.font = '11px monospace';
-  ctx.fillText(subtitle, r.x + r.w / 2, r.y + r.h / 2 + 14);
+  ctx.fillText(subtitle, r.x + r.w / 2, r.y + r.h / 2 + (pressed ? 15 : 14));
 }
 
-function drawMenuButtonDisabled(
-  ctx: CanvasRenderingContext2D,
-  r: ButtonRect,
-  label: string,
-  subtitle: string,
-): void {
-  ctx.fillStyle = '#0d0d1a';
-  ctx.fillRect(r.x, r.y, r.w, r.h);
-  ctx.strokeStyle = '#2a2a3a';
-  ctx.lineWidth = 1;
-  ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
-  ctx.fillStyle = '#3a3a55';
-  ctx.font = 'bold 14px monospace';
-  ctx.textAlign = 'center';
-  ctx.fillText(label, r.x + r.w / 2, r.y + r.h / 2 - 4);
-  ctx.fillStyle = '#2a2a44';
-  ctx.font = '11px monospace';
-  ctx.fillText(subtitle, r.x + r.w / 2, r.y + r.h / 2 + 14);
-}
 
 function drawBvbBoard(
   ctx: CanvasRenderingContext2D,
@@ -561,45 +537,28 @@ function drawBvbResult(ctx: CanvasRenderingContext2D, winner: 'bot1' | 'bot2' | 
   ctx.fillText('R: rematch   Esc: menu', cx, cy + 20);
 }
 
-function drawMenu(ctx: CanvasRenderingContext2D, customAiName: string | null, isAdmin: boolean, difficultyPending: boolean, cnnReady = false): void {
+function drawMenu(
+  ctx: CanvasRenderingContext2D,
+  isAdmin: boolean,
+  pressedBtn: ButtonRect | null = null,
+): void {
   ctx.fillStyle = '#aaaaff';
   ctx.font = 'bold 52px monospace';
   ctx.textAlign = 'center';
+
   ctx.fillText('TETRIS', MENU_CX, CANVAS_H / 2 - 50);
-
-  if (difficultyPending) {
-    ctx.fillStyle = LABEL_COLOR;
-    ctx.font = '13px monospace';
-    ctx.fillText('choose a difficulty', MENU_CX, CANVAS_H / 2 - 14);
-    drawMenuButton(ctx, MENU_DIFF_EASY_BTN,   'EASY',   '#66ffaa', 'greedy one-piece');
-    drawMenuButton(ctx, MENU_DIFF_MEDIUM_BTN, 'MEDIUM', '#ffcc44', 'beam search');
-    drawMenuButton(ctx, MENU_DIFF_HARD_BTN,   'HARD',   '#ff6666', 'beam search+');
-    if (cnnReady) {
-      drawMenuButton(ctx, MENU_DIFF_EXPERIMENTAL_BTN, 'EXPERIMENTAL', '#cc88ff', 'CNN eval');
-    } else {
-      drawMenuButtonDisabled(ctx, MENU_DIFF_EXPERIMENTAL_BTN, 'EXPERIMENTAL', 'loading...');
-    }
-    ctx.fillStyle = LABEL_COLOR;
-    ctx.font = '11px monospace';
-    ctx.fillText('Esc to go back', MENU_CX, MENU_BY + BTN_H + 16);
-    return;
-  }
-
   ctx.fillStyle = LABEL_COLOR;
   ctx.font = '13px monospace';
   ctx.fillText('choose a mode', MENU_CX, CANVAS_H / 2 - 14);
   // Row 1 — available to all users
-  drawMenuButton(ctx, MENU_SPRINT_BTN,   'SPRINT',   '#66ffaa', 'race to 40 lines');
-  drawMenuButton(ctx, MENU_CREATIVE_BTN, 'CREATIVE', '#aaaaff', 'free play + editor');
-  drawMenuButton(ctx, MENU_VERSUS_BTN,   'VERSUS',   '#ffaa44', 'pick a difficulty');
+  drawMenuButton(ctx, MENU_SPRINT_BTN,   'SPRINT',   '#66ffaa', 'race to 40 lines',      false, pressedBtn === MENU_SPRINT_BTN);
+  drawMenuButton(ctx, MENU_CREATIVE_BTN, 'CREATIVE', '#aaaaff', 'free play + editor',    false, pressedBtn === MENU_CREATIVE_BTN);
+  drawMenuButton(ctx, MENU_VERSUS_BTN,   'VERSUS',   '#ffaa44', 'pick a difficulty',     false, pressedBtn === MENU_VERSUS_BTN);
   // Row 2 — admin only
   if (isAdmin) {
-    drawMenuButton(ctx, MENU_WATCH_BTN,  'WATCH',      '#44ccff', 'watch AI play solo');
-    drawMenuButton(ctx, MENU_BVB_BTN,    'BOT VS BOT', '#ff8844', 'two AIs compete');
-    const aiSubtitle = customAiName
-      ? (customAiName.length > 20 ? customAiName.substring(0, 18) + '…' : customAiName)
-      : 'upload & select AI';
-    drawMenuButton(ctx, MENU_UPLOAD_BTN, 'AI MANAGER', '#ff88cc', aiSubtitle);
+    drawMenuButton(ctx, MENU_WATCH_BTN,  'WATCH',      '#44ccff', 'pick a difficulty', false, pressedBtn === MENU_WATCH_BTN);
+    drawMenuButton(ctx, MENU_BVB_BTN,    'BOT VS BOT', '#ff8844', 'pick difficulties', false, pressedBtn === MENU_BVB_BTN);
+    drawMenuButton(ctx, MENU_UPLOAD_BTN, 'AI MANAGER', '#ff88cc', 'upload AIs',        false, pressedBtn === MENU_UPLOAD_BTN);
   }
 }
 
@@ -1146,6 +1105,7 @@ function drawClassificationHUD(
   startY: number,
   classification: ClassificationResult | null,
   showBestMove: boolean,
+  pressedBtn: ButtonRect | null = null,
 ): void {
   const badgeY = startY + 104;
 
@@ -1174,15 +1134,16 @@ function drawClassificationHUD(
 
   // SEE BEST MOVE / HIDE BEST MOVE button
   const btn = GAME_REVIEW_BTN;
-  ctx.fillStyle = showBestMove ? '#1a1a3a' : '#13132a';
+  const isPressed = pressedBtn === btn;
+  ctx.fillStyle = isPressed ? '#22224a' : showBestMove ? '#1a1a3a' : '#13132a';
   ctx.fillRect(btn.x, btn.y, btn.w, btn.h);
-  ctx.strokeStyle = showBestMove ? '#5555aa' : '#3a3a66';
+  ctx.strokeStyle = isPressed ? '#7777cc' : showBestMove ? '#5555aa' : '#3a3a66';
   ctx.lineWidth = 1;
   ctx.strokeRect(btn.x + 0.5, btn.y + 0.5, btn.w - 1, btn.h - 1);
-  ctx.fillStyle = showBestMove ? '#8888cc' : '#5555aa';
+  ctx.fillStyle = isPressed ? '#aaaadd' : showBestMove ? '#8888cc' : '#5555aa';
   ctx.font = 'bold 10px monospace';
   ctx.textAlign = 'center';
-  ctx.fillText(showBestMove ? 'HIDE BEST' : 'SEE BEST MOVE', btn.x + btn.w / 2, btn.y + btn.h / 2 + 4);
+  ctx.fillText(showBestMove ? 'HIDE BEST' : 'SEE BEST MOVE', btn.x + btn.w / 2, btn.y + btn.h / 2 + (isPressed ? 5 : 4));
 }
 
 /**
@@ -1196,6 +1157,7 @@ export function drawGameReviewScreen(
   classification: ClassificationResult | null,
   showBestMove: boolean,
   timestamp: number,
+  pressedBtn: ButtonRect | null = null,
 ): void {
   const entry = replay.entries[Math.min(moveIdx, replay.entries.length - 1)];
   const snap  = entry.snapshot;
@@ -1231,7 +1193,7 @@ export function drawGameReviewScreen(
   const startY = HOLD_Y + 100;
   drawHUDEntry(ctx, 'REVIEW', `${moveIdx + 1}/${replay.entries.length}`, x, startY);
   drawHUDEntry(ctx, 'LINES', String(snap.lines), x, startY + 52);
-  drawClassificationHUD(ctx, x, startY, classification, showBestMove);
+  drawClassificationHUD(ctx, x, startY, classification, showBestMove, pressedBtn);
 
   const hints = ['←→: step moves', showBestMove ? 'B: hide best move' : 'B: see best move', 'Esc: back'];
   if (showBestMove) hints.splice(2, 0, '↑↓: cycle lines');
@@ -1250,6 +1212,7 @@ export function drawVersusGameReviewScreen(
   classification: ClassificationResult | null,
   showBestMove: boolean,
   timestamp: number,
+  pressedBtn: ButtonRect | null = null,
 ): void {
   const entry      = entries[Math.min(moveIdx, entries.length - 1)];
   const playerSnap = entry.playerSnapshot;
@@ -1318,7 +1281,7 @@ export function drawVersusGameReviewScreen(
   const startY = HOLD_Y + 100;
   drawHUDEntry(ctx, 'REVIEW', `${moveIdx + 1}/${entries.length}`, x, startY);
   drawHUDEntry(ctx, 'LINES', String(playerSnap.lines), x, startY + 52);
-  drawClassificationHUD(ctx, x, startY, classification, showBestMove);
+  drawClassificationHUD(ctx, x, startY, classification, showBestMove, pressedBtn);
 
   const hints = ['←→: step moves', 'Esc: back'];
   if (showBestMove) hints.splice(1, 0, '↑↓: cycle lines');
