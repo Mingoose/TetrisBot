@@ -22,7 +22,7 @@ VITE_SUPABASE_ANON_KEY=...
 
 ### Architecture
 
-Twenty-two TypeScript source files in `src/`, each with a single responsibility:
+Twenty-three TypeScript source files in `src/`, each with a single responsibility:
 
 **Core game engine:**
 - **`types.ts`** — All shared interfaces: `GameState`, `Snapshot`, `ActivePiece`, `CellValue`, `GameMode`, `GameVariant`
@@ -35,7 +35,8 @@ Twenty-two TypeScript source files in `src/`, each with a single responsibility:
 
 **AI engine (Web Worker pipeline):**
 - **`engine.ts`** — Public types: `EngineRequest`, `EngineAnalysis`, `EngineLine`, `EngineMove`; `gameStateToEngineRequest()` helper
-- **`ai.ts`** — Beam search implementation; `findBestMove`/`findBestMoveHard`/`analyzePositionHard`; `AiDifficulty` levels (easy=greedy, medium=beam W20 D4, hard=beam W32 D5 + advanced eval)
+- **`ai.ts`** — Beam search implementation; `findBestMove`/`findBestMoveHard`/`analyzePositionHard`; `AiDifficulty` levels (easy=greedy, medium=beam W20 D4, hard=beam W32 D5 + advanced eval, experimental=CNN eval beam W20 D3); internally uses a `Uint16Array` bitmask board for fast line-clear detection and board copies during search
+- **`cnnEvaluator.ts`** — TensorFlow.js CNN position evaluator for `experimental` difficulty; loads weights from `public/models/tetris_eval_weights.bin`; exports `loadCnnModel()`, `isCnnReady()`, `evaluateBoardsBatch()`; architecture: 3× Conv2D(BN-folded) + GlobalAvgPool + 2× Dense, input `[N,20,10,1]` binary occupancy
 - **`ai.worker.ts`** — Web Worker entry point; dispatches `type:'analyze'` to `analyzePositionHard`, otherwise to bot-move functions
 - **`moveQuality.ts`** — `classifyMove()`: matches player placement against engine lines to rate quality (great/good/mistake/blunder) by score delta
 
@@ -63,6 +64,8 @@ Twenty-two TypeScript source files in `src/`, each with a single responsibility:
 **Layout constants:** `CELL_SIZE`, `BOARD_OFFSET_X`, `BOARD_OFFSET_Y` live in `editor.ts` and are imported by `renderer.ts`. Changing these changes both the editor hit-testing and the visual layout simultaneously.
 
 **Game variants:** `'sprint'` races to 40 lines; `'creative'` is free play with board editor + engine analysis on pause; `'versus'` pits player against the bot with garbage exchange; `'watch'` is bot-only; `'botvsbot'` runs two bots head-to-head on a shared piece sequence.
+
+**CNN evaluator weights:** `public/models/tetris_eval_weights.bin` is a flat float32 blob of all CNN layer weights (conv1–3 kernels+biases, dense1–2 kernels+biases) exported from PyTorch with BatchNorm folded into Conv layers. The ONNX files in the same directory are not used at runtime. `loadCnnModel()` must be awaited before the `experimental` difficulty can run; `isCnnReady()` guards calls.
 
 **Web Worker AI:** `ai.worker.ts` runs beam search off the main thread. `main.ts` posts requests via `requestBotMove()` (from `versus.ts`) and receives responses with the chosen move. Engine analysis for creative pause uses a separate `type:'analyze'` message path and returns `EngineAnalysis` with `topN` ranked lines.
 
