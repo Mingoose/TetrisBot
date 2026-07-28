@@ -121,3 +121,4 @@ All screen coordinates in `main_app.py` assume a specific screen resolution/brow
 Piece colors are identified by exact RGB thresholds in `classify_by_pixel`. If the game UI changes, these need updating.
 
 Login credentials are hardcoded in `log_in()` (`ababababab` / `ababababab_test`).
+test
