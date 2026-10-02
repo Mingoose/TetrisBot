@@ -22,12 +22,13 @@ VITE_SUPABASE_ANON_KEY=...
 
 ### Architecture
 
-Twenty-three TypeScript source files in `src/`, each with a single responsibility:
+Twenty-four TypeScript source files in `src/`, each with a single responsibility:
 
 **Core game engine:**
 - **`types.ts`** — All shared interfaces: `GameState`, `Snapshot`, `ActivePiece`, `CellValue`, `GameMode`, `GameVariant`
-- **`pieces.ts`** — Piece rotation matrices, SRS wall-kick tables (`WALL_KICKS_JLSTZ`, `WALL_KICKS_I`), piece colors
-- **`board.ts`** — Pure functions: `collides`, `hardDropY`, `lockPiece`, `clearLines`, `isGameOver`, `scoreForLines`, `gravityInterval`
+- **`pieces.ts`** — Piece rotation matrices, SRS+ wall kicks (TETR.IO; `getKicks(type, from, to)` covers CW, CCW and 180°, unkicked test first), piece colors
+- **`board.ts`** — Pure functions: `collides`, `hardDropY`, `lockPiece`, `clearLines`, `isGameOver`, `scoreForLines`, `gravityInterval`, `detectSpin`
+- **`rules.ts`** — TETR.IO multiplayer rules, the single source of truth for spins and attack: `classifySpin` (All-Mini+), `resolveClear` (attack table, multiplier combos, B2B level + surge, all clears), `clearLabel`. Mirrors Triangle.js (github.com/halp1/triangle); `npm run test:rules` checks it against that implementation
 - **`bag.ts`** — 7-bag randomizer with `getState()`/`restoreState()` for snapshot-accurate rewind
 - **`game.ts`** — Game loop (`processFrame`), gravity, DAS/ARR, lock delay, `lockAndSpawn`, hold, hard drop, sprint completion; `setLockHook()` for versus mode callbacks
 - **`input.ts`** — Keyboard event handler; `flushInput()` clears per-frame edge state each loop
@@ -69,9 +70,13 @@ Twenty-three TypeScript source files in `src/`, each with a single responsibilit
 
 **Web Worker AI:** `ai.worker.ts` runs beam search off the main thread. `main.ts` posts requests via `requestBotMove()` (from `versus.ts`) and receives responses with the chosen move. Engine analysis for creative pause uses a separate `type:'analyze'` message path and returns `EngineAnalysis` with `topN` ranked lines.
 
-**Versus garbage:** `versus.ts` owns all combat math — `computeGarbage()`, `handleLock()`, and `CombatState`. Garbage is exchanged on each piece lock; cancellation is applied before routing the remainder to the opponent.
+**Versus garbage:** `versus.ts` owns garbage exchange (`handleLock()`, `receiveGarbage()`, `CombatState`), using `rules.ts` for the attack itself and the garbage settings (`RULES.garbageCap`, `garbageSpeedMs`, messiness). TETR.IO behaviour: a clearing lock attacks, cancelling queued garbage oldest-first and sending the rest; only a lock that clears nothing lets garbage land, at most `garbageCap` rows, and only chunks that have finished travelling. `CombatState.incoming` is the queue and `pendingGarbage` its total (only `versus.ts` should modify either). `CombatState.b2b` is a level (-1 = none), not a flag, because surge depends on it.
+
+**Spins:** the player's spin needs the last successful action to be a rotation (any shift, fall or drop clears `lastActionRotation`). Bots return only a final position, so `applyBotMove` credits the best spin a final rotation into it can earn (`placementSpin` in `ai.ts`), which `findReachablePlacements` records per state from rotation edges.
 
 **Bot-vs-bot piece sync:** Both bots share a single `bvbSeq[]` array grown lazily by one Bag. Each bot tracks its own `pieceIndex` so they draw deterministically from the same sequence regardless of play speed.
+
+**Self-play harness (`harness/`):** `npm run harness -- --out ../training/data/runs/<name> --games N` plays headless games with the real `ai.ts` beam search across worker threads and writes fixed-width binary records (layout in `harness/record.ts`, mirrored into each run's `meta.json`). Load them in Python with `training/selfplay_data.py`. Games are reproducible from `(--seed, game id)` because each game swaps in a seeded `Math.random`. On an M1, the hard teacher (W32 D5) produces about 90K positions/hour; throughput levels off at about 4 workers. Typecheck with `npm run harness:typecheck` (the app's `tsc` only covers `src/`). `--weights file.json` overrides hard-mode weights via `setWeights()` in `ai.ts`; `training/compare_runs.py` compares runs with the same seed game by game.
 
 **Lock delay:** 500ms, resets on movement, max 15 resets before force-lock.
 
