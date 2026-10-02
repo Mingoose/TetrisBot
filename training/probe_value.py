@@ -58,7 +58,7 @@ def context_vec(c):
 
 
 def main(path):
-    ckpt = torch.load(path)
+    ckpt = torch.load(path, map_location='cpu')
     model = ValueNet(**ckpt['config'])
     model.load_state_dict(ckpt['state_dict'])
     model.eval()

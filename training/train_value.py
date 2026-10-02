@@ -9,7 +9,8 @@ net has not seen. Reports, besides loss:
 
 Usage:
     python train_value.py data/runs/teacher-v1 [more runs...]
-        [--epochs 20] [--horizon 12] [--channels 32] [--out models/value_v1.pt]
+        [--epochs 20] [--patience 4] [--horizon 12] [--channels 32]
+        [--device auto|cpu|mps|cuda] [--out models/value_v1.pt]
 """
 
 import argparse
@@ -38,14 +39,25 @@ def load_samples(run_dirs, horizon, gamma, death_penalty):
             np.concatenate(labels), np.concatenate(games))
 
 
+def pick_device(name):
+    if name != 'auto':
+        return torch.device(name)
+    if torch.cuda.is_available():
+        return torch.device('cuda')
+    if torch.backends.mps.is_available():  # Apple GPU; needs a recent macOS
+        return torch.device('mps')
+    return torch.device('cpu')
+
+
 @torch.no_grad()
-def evaluate(model, loader, loss_fn, shuffle_context=False):
+def evaluate(model, loader, loss_fn, device, shuffle_context=False):
     model.eval()
     total, n, preds, targets = 0.0, 0, [], []
     gen = torch.Generator().manual_seed(0)
     for b, c, y in loader:
         if shuffle_context:
             c = c[torch.randperm(len(c), generator=gen)]
+        b, c, y = b.to(device), c.to(device), y.to(device)
         p = model(b, c)
         total += loss_fn(p, y).item() * len(y)
         n += len(y)
@@ -68,9 +80,14 @@ def main():
     ap.add_argument('--squeeze', type=int, default=8)
     ap.add_argument('--hidden', type=int, default=128)
     ap.add_argument('--threads', type=int, default=4)
+    ap.add_argument('--device', default='auto')
+    ap.add_argument('--patience', type=int, default=4,
+                    help='stop after this many epochs without a better validation loss')
     ap.add_argument('--out', default='models/value_v1.pt')
     args = ap.parse_args()
     torch.set_num_threads(args.threads)
+    device = pick_device(args.device)
+    print(f'device: {device}')
     torch.manual_seed(0)
 
     boards, ctx, labels, games = load_samples(args.runs, args.horizon, args.gamma, args.death_penalty)
@@ -93,40 +110,46 @@ def main():
     print(f'train {int((~is_val).sum())} / val {int(is_val.sum())} samples '
           f'({len(uniq) - len(val_games)} / {len(val_games)} games)')
 
-    model = ValueNet(args.channels, args.squeeze, args.hidden)
+    model = ValueNet(args.channels, args.squeeze, args.hidden).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f'model: {n_params:,} params, {model.macs_per_board():,} MACs/board')
 
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.epochs)
     loss_fn = nn.SmoothL1Loss()
-    best = float('inf')
+    best, best_epoch = float('inf'), 0
     os.makedirs(os.path.dirname(args.out) or '.', exist_ok=True)
 
     for epoch in range(1, args.epochs + 1):
         model.train()
         t0, total, n = time.time(), 0.0, 0
         for b, c, y in train_dl:
+            b, c, y = b.to(device), c.to(device), y.to(device)
             opt.zero_grad()
             loss = loss_fn(model(b, c), y)
             loss.backward()
             opt.step()
             total += loss.item() * len(y); n += len(y)
         sched.step()
-        val_loss, r2 = evaluate(model, val_dl, loss_fn)
+        val_loss, r2 = evaluate(model, val_dl, loss_fn, device)
         flag = ''
         if val_loss < best:
-            best = val_loss
-            torch.save({'state_dict': model.state_dict(), 'config': model.config,
+            best, best_epoch = val_loss, epoch
+            # Save CPU tensors so the checkpoint loads on any machine.
+            state = {k: v.cpu() for k, v in model.state_dict().items()}
+            torch.save({'state_dict': state, 'config': model.config,
                         'label_mean': mean, 'label_std': std, 'args': vars(args)}, args.out)
             flag = ' *'
         print(f'epoch {epoch:3d}  train {total / n:.4f}  val {val_loss:.4f}  R² {r2:.3f}  '
               f'({time.time() - t0:.0f}s){flag}')
+        if epoch - best_epoch >= args.patience:
+            print(f'no improvement for {args.patience} epochs; stopping')
+            break
 
-    ckpt = torch.load(args.out)
+    ckpt = torch.load(args.out, map_location=device)
     model.load_state_dict(ckpt['state_dict'])
-    val_loss, r2 = evaluate(model, val_dl, loss_fn)
-    shuf_loss, shuf_r2 = evaluate(model, val_dl, loss_fn, shuffle_context=True)
+    val_loss, r2 = evaluate(model, val_dl, loss_fn, device)
+    shuf_loss, shuf_r2 = evaluate(model, val_dl, loss_fn, device, shuffle_context=True)
     print(f'\nbest checkpoint → {args.out}')
     print(f'  val loss {val_loss:.4f}, R² {r2:.3f}')
     print(f'  with piece context shuffled: loss {shuf_loss:.4f}, R² {shuf_r2:.3f} '
