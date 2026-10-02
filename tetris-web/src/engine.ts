@@ -1,4 +1,5 @@
 import type { CellValue, PieceType, GameState } from './types';
+import type { SpinKind } from './rules';
 
 /** A single piece placement in a recommended continuation. */
 export interface EngineMove {
@@ -8,7 +9,7 @@ export interface EngineMove {
   y: number;
   useHold: boolean;
   linesCleared: number;
-  isTSpin: boolean;
+  spin: SpinKind;
   isPerfectClear: boolean;
 }
 
@@ -42,7 +43,7 @@ export interface EngineRequest {
   holdUsed: boolean;
   bagState: PieceType[];
   combo: number;
-  b2bActive: boolean;
+  b2b: number;           // B2B level (-1 = none)
   pendingGarbage: number;
   // Search parameters
   beamWidth: number;
@@ -53,8 +54,8 @@ export interface EngineRequest {
 /**
  * Build an EngineRequest from a live GameState.
  *
- * `combo` and `b2bActive` are not stored on GameState (they live on BotBoard
- * in versus mode only), so they default conservatively to -1 / false.
+ * `combo` and `b2b` are not stored on GameState (they live on BotBoard
+ * in versus mode only), so they default conservatively to -1 / -1.
  * Pass them explicitly when you have access to those values.
  */
 export function gameStateToEngineRequest(
@@ -65,7 +66,7 @@ export function gameStateToEngineRequest(
     topN?: number;
     pendingGarbage?: number;
     combo?: number;
-    b2bActive?: boolean;
+    b2b?: number;
   } = {},
 ): EngineRequest {
   return {
@@ -76,7 +77,7 @@ export function gameStateToEngineRequest(
     holdUsed: state.holdUsed,
     bagState: [...state.bagState],
     combo:          params.combo          ?? -1,
-    b2bActive:      params.b2bActive      ?? false,
+    b2b:            params.b2b            ?? -1,
     pendingGarbage: params.pendingGarbage ?? 0,
     beamWidth:      params.beamWidth      ?? 48,
     searchDepth:    params.searchDepth    ?? 6,

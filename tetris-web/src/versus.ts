@@ -2,17 +2,36 @@ import { ActivePiece, CellValue, PieceType } from './types';
 import { Bag } from './bag';
 import {
   emptyBoard, collides, lockPiece, clearLines, isGameOver, hardDropY,
-  addGarbageLines, countTSpinCorners, BOARD_COLS,
+  addGarbageLines, BOARD_COLS,
 } from './board';
 import { setLockHook, spawnPiece, NEXT_QUEUE_SIZE } from './game';
+import { SpinKind, RULES, resolveClear } from './rules';
+import { placementSpin } from './ai';
 
-// Jstris combo bonus table (0-indexed: 0 = first consecutive clear).
-export const COMBO_TABLE = [0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 4, 5] as const;
+// One received attack waiting to land, TETR.IO style: it can't land until it
+// has travelled (readyAt), and all its rows share a hole column unless
+// messinessWithin says otherwise.
+export interface GarbageChunk {
+  amount: number;
+  readyAt: number;  // ms timestamp (performance.now() in the game, a virtual clock in the harness)
+  column: number;
+}
 
 export interface CombatState {
   combo: number;           // -1 = no streak; 0+ = consecutive-clear index (0 = first clear)
-  b2bActive: boolean;      // previous qualifying clear enables B2B bonus on this one
-  pendingGarbage: number;  // incoming garbage queued to arrive on next lock
+  b2b: number;             // B2B level: -1 = none, 0 = first qualifying clear, ...
+  incoming: GarbageChunk[]; // oldest first
+  pendingGarbage: number;  // total rows in `incoming`; kept in sync by the functions below
+}
+
+// What one lock produced, for stats and the self-play harness.
+export interface LockOutcome {
+  lines: number;
+  spin: SpinKind;
+  perfectClear: boolean;
+  attack: number;     // garbage generated, before cancelling incoming
+  surge: number;      // part of attack released by breaking a charged B2B
+  garbageIn: number;  // garbage rows that landed on the locker's board
 }
 
 export interface BotBoard {
@@ -96,7 +115,7 @@ function makeBotBoard(
 }
 
 function makeCombat(): CombatState {
-  return { combo: -1, b2bActive: false, pendingGarbage: 0 };
+  return { combo: -1, b2b: -1, incoming: [], pendingGarbage: 0 };
 }
 
 // Pass playerSnapshot to start the bot with the same piece sequence as the player.
@@ -143,73 +162,82 @@ export function initBotVsBotData(): BotVsBotData {
 // ---- Garbage math ----
 
 // comboIndex: -1 means no streak; 0+ is the consecutive-clear index after incrementing.
-export function computeGarbage(
-  linesCleared: number,
-  isTSpin: boolean,
-  b2bActive: boolean,
-  comboIndex: number,
-): number {
-  if (linesCleared === 0) return 0;
-  let base: number;
-  if (isTSpin) {
-    base = ([2, 4, 6] as const)[linesCleared - 1] ?? 6;
-  } else {
-    base = ([0, 1, 2, 4] as const)[linesCleared - 1] ?? 4;
-  }
-  const qualifying = isTSpin || linesCleared === 4;
-  if (qualifying && b2bActive) base++;
-  if (comboIndex >= 0) base += COMBO_TABLE[Math.min(comboIndex, COMBO_TABLE.length - 1)];
-  return base;
+function randomHoleColumn(): number {
+  return Math.floor(Math.random() * BOARD_COLS);
 }
 
-// Shared lock-event handler: updates combat state, exchanges garbage between
-// the locker and opponent, and injects any remaining pending garbage into the
-// locker's board. Returns the (possibly modified) board.
-function handleLock(
+// Queue an attack against `combat`; it can land once it has travelled.
+export function receiveGarbage(combat: CombatState, amount: number, now: number): void {
+  if (amount <= 0) return;
+  const last = combat.incoming[combat.incoming.length - 1];
+  const column = last && Math.random() >= RULES.messinessChange ? last.column : randomHoleColumn();
+  combat.incoming.push({ amount, readyAt: now + RULES.garbageSpeedMs, column });
+  combat.pendingGarbage += amount;
+}
+
+// Cancel up to `amount` queued rows, oldest first. Returns what was left over.
+function cancelGarbage(combat: CombatState, amount: number): number {
+  while (amount > 0 && combat.incoming.length > 0) {
+    const chunk = combat.incoming[0];
+    const n = Math.min(chunk.amount, amount);
+    chunk.amount -= n;
+    amount -= n;
+    combat.pendingGarbage -= n;
+    if (chunk.amount === 0) combat.incoming.shift();
+  }
+  return amount;
+}
+
+// Land up to the garbage cap of rows that have finished travelling.
+function tankGarbage(combat: CombatState, board: CellValue[][], now: number): { board: CellValue[][]; rows: number } {
+  let rows = 0;
+  while (rows < RULES.garbageCap && combat.incoming.length > 0 && combat.incoming[0].readyAt <= now) {
+    const chunk = combat.incoming[0];
+    if (rows > 0 && Math.random() < RULES.messinessWithin) chunk.column = randomHoleColumn();
+    board = addGarbageLines(board, 1, chunk.column);
+    chunk.amount--;
+    combat.pendingGarbage--;
+    rows++;
+    if (chunk.amount === 0) combat.incoming.shift();
+  }
+  return { board, rows };
+}
+
+// Shared lock-event handler, following TETR.IO: a clearing lock attacks, its
+// attack first cancelling queued garbage; a lock that clears nothing lets
+// queued garbage land. `board` is the locker's board after line clears.
+export function handleLock(
   lockerCombat: CombatState,
   opponentCombat: CombatState,
-  lockerBoard: CellValue[][],
+  board: CellValue[][],
   linesCleared: number,
-  isTSpin: boolean,
-): CellValue[][] {
-  let garbageOut = 0;
+  spin: SpinKind,
+  now: number,
+): { board: CellValue[][]; outcome: LockOutcome } {
+  const perfectClear = linesCleared > 0 && board.every(row => row.every(c => c === 0));
+  const clear = resolveClear(lockerCombat.combo, lockerCombat.b2b, linesCleared, spin, perfectClear);
+  lockerCombat.combo = clear.combo;
+  lockerCombat.b2b = clear.b2b;
+
+  let garbageIn = 0;
   if (linesCleared > 0) {
-    lockerCombat.combo = lockerCombat.combo < 0 ? 0 : lockerCombat.combo + 1;
-    garbageOut = computeGarbage(linesCleared, isTSpin, lockerCombat.b2bActive, lockerCombat.combo);
-    lockerCombat.b2bActive = isTSpin || linesCleared === 4;
+    receiveGarbage(opponentCombat, cancelGarbage(lockerCombat, clear.attack), now);
   } else {
-    lockerCombat.combo = -1;
+    const tanked = tankGarbage(lockerCombat, board, now);
+    board = tanked.board;
+    garbageIn = tanked.rows;
   }
-
-  // Cancel outgoing against incoming, route remainder to opponent
-  const netOut = Math.max(0, garbageOut - lockerCombat.pendingGarbage);
-  lockerCombat.pendingGarbage = Math.max(0, lockerCombat.pendingGarbage - garbageOut);
-  opponentCombat.pendingGarbage += netOut;
-
-  // Inject remaining pending garbage into the locker's own board
-  if (lockerCombat.pendingGarbage > 0) {
-    const holeCol = Math.floor(Math.random() * BOARD_COLS);
-    lockerBoard = addGarbageLines(lockerBoard, lockerCombat.pendingGarbage, holeCol);
-    lockerCombat.pendingGarbage = 0;
-  }
-  return lockerBoard;
+  return {
+    board,
+    outcome: { lines: linesCleared, spin, perfectClear, attack: clear.attack, surge: clear.surge, garbageIn },
+  };
 }
 
 // ---- Player lock hook ----
 
 export function setupPlayerLockHook(data: VersusData): void {
-  setLockHook((state, linesCleared, landedPiece, preLockBoard, wasRotation) => {
-    const isTSpin =
-      landedPiece.type === 'T' &&
-      wasRotation &&
-      countTSpinCorners(preLockBoard, landedPiece) >= 3;
-    state.board = handleLock(
-      data.playerCombat,
-      data.botCombat,
-      state.board,
-      linesCleared,
-      isTSpin,
-    );
+  setLockHook((state, linesCleared, _landedPiece, spin) => {
+    state.board = handleLock(data.playerCombat, data.botCombat, state.board, linesCleared, spin, performance.now()).board;
     // Check if post-garbage board triggers game over (board overflow)
     if (isGameOver(state.board)) state.mode = 'gameover';
   });
@@ -224,15 +252,17 @@ export function requestBotMove(
   combat: CombatState,
   aiParams?: { beamWidth: number; searchDepth: number; advancedEval?: boolean; cnnEval?: boolean },
 ): void {
-  const { pendingGarbage, combo, b2bActive } = combat;
+  const { pendingGarbage, combo, b2b } = combat;
+  // b2bActive is kept for uploaded AIs written against the older message format.
+  const b2bActive = b2b >= 0;
   if (bot.pieceIndex >= 0) {
     // Extend shared sequence and pass a slice as bagState so the beam search
     // looks ahead into the same pieces both bots will actually receive.
     getBvbPiece(bot.pieceIndex + WORKER_LOOKAHEAD - 1);
     const bagState = bvbSeq.slice(bot.pieceIndex, bot.pieceIndex + WORKER_LOOKAHEAD);
-    worker.postMessage({ bot: { ...bot, bagState }, pendingGarbage, combo, b2bActive, ...aiParams });
+    worker.postMessage({ bot: { ...bot, bagState }, pendingGarbage, combo, b2b, b2bActive, ...aiParams });
   } else {
-    worker.postMessage({ bot, pendingGarbage, combo, b2bActive, ...aiParams });
+    worker.postMessage({ bot, pendingGarbage, combo, b2b, b2bActive, ...aiParams });
   }
 }
 
@@ -246,6 +276,8 @@ export function applyBotMove(
   bot: BotBoard,
   botCombat: CombatState,
   playerCombat: CombatState,
+  onLock?: (outcome: LockOutcome) => void,
+  now: number = performance.now(),
 ): 'occupied' | 'floating' | null {
   if (bot.dead) return null;
 
@@ -292,8 +324,8 @@ export function applyBotMove(
     piece.y = hardDropY(bot.board, { ...piece, y: 0 });
   }
 
-  // T-spin check (bot always "rotates" to reach target; use 3-corner rule)
-  const isTSpin = piece.type === 'T' && countTSpinCorners(bot.board, piece) >= 3;
+  // Bots send only a final position; credit the best spin a rotation into it can earn.
+  const spin = invalidReason ? 0 : placementSpin(bot.board, piece);
 
   // Lock and clear
   const locked = lockPiece(bot.board, piece);
@@ -302,7 +334,9 @@ export function applyBotMove(
   bot.lines += linesCleared;
 
   // Garbage exchange
-  bot.board = handleLock(botCombat, playerCombat, bot.board, linesCleared, isTSpin);
+  const lock = handleLock(botCombat, playerCombat, bot.board, linesCleared, spin, now);
+  bot.board = lock.board;
+  onLock?.(lock.outcome);
 
   // Spawn next piece
   if (!useBvb) botBag.restoreState(bot.bagState);

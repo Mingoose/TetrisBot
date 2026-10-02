@@ -12,7 +12,7 @@ loadCnnModel()
 self.onmessage = (e: MessageEvent) => {
   const data = e.data as
     | { type: 'analyze'; request: EngineRequest }
-    | { type?: undefined; bot: BotBoard; pendingGarbage: number; combo?: number; b2bActive?: boolean; beamWidth?: number; searchDepth?: number; advancedEval?: boolean; cnnEval?: boolean };
+    | { type?: undefined; bot: BotBoard; pendingGarbage: number; combo?: number; b2b?: number; beamWidth?: number; searchDepth?: number; advancedEval?: boolean; cnnEval?: boolean };
 
   console.log('[worker] onmessage type:', data.type, 'cnnEval:', (data as any).cnnEval);
 
@@ -22,16 +22,16 @@ self.onmessage = (e: MessageEvent) => {
     return;
   }
 
-  const { bot, pendingGarbage, combo = -1, b2bActive = false, beamWidth, searchDepth, advancedEval, cnnEval } = data;
+  const { bot, pendingGarbage, combo = -1, b2b = -1, beamWidth, searchDepth, advancedEval, cnnEval } = data;
 
   if (cnnEval) {
     console.log('[worker] starting cnnEval move');
-    findBestMoveCNN(bot, pendingGarbage, beamWidth, searchDepth, combo, b2bActive, evaluateBoardsBatch)
+    findBestMoveCNN(bot, pendingGarbage, beamWidth, searchDepth, combo, b2b, evaluateBoardsBatch)
       .then(move => { console.log('[worker] cnnEval move done:', move); self.postMessage(move); })
       .catch(e => console.error('[worker] cnnEval move error:', e));
     return;
   }
 
   const fn = advancedEval ? findBestMoveHard : findBestMove;
-  self.postMessage(fn(bot, pendingGarbage, beamWidth, searchDepth, combo, b2bActive));
+  self.postMessage(fn(bot, pendingGarbage, beamWidth, searchDepth, combo, b2b));
 };

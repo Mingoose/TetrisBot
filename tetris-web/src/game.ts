@@ -1,4 +1,4 @@
-import { GameState, GameVariant, ActivePiece, PieceType, CellValue, Snapshot } from './types';
+import { GameState, GameVariant, ActivePiece, PieceType, Snapshot } from './types';
 import { Settings } from './settings';
 import {
   emptyBoard,
@@ -9,10 +9,12 @@ import {
   scoreForLines,
   gravityInterval,
   hardDropY,
-  attemptRotation,
+  attemptRotationWithKick,
+  detectSpin,
   BOARD_COLS,
 } from './board';
 import { getRotation } from './pieces';
+import { SpinKind, isTstKick } from './rules';
 import { Bag } from './bag';
 import { pushHistory, rewind } from './rewind';
 import { InputState, wasJustPressed, isHeld } from './input';
@@ -26,8 +28,7 @@ export type LockHook = (
   state: GameState,
   linesCleared: number,
   landedPiece: ActivePiece,
-  preLockBoard: CellValue[][],
-  wasRotation: boolean,
+  spin: SpinKind,
 ) => void;
 
 let lockHook: LockHook | null = null;
@@ -85,6 +86,7 @@ export function initGameState(variant: GameVariant): GameState {
     sprintStartTime: 0,
     sprintElapsedMs: 0,
     lastActionRotation: false,
+    lastRotationTstKick: false,
   };
 }
 
@@ -148,10 +150,9 @@ function lockAndSpawn(state: GameState): void {
     );
   }
 
-  // Capture for lock hook (T-spin detection needs pre-lock board + piece position)
+  // Spin detection needs the board before the piece locks.
   const landedPiece = { ...state.active };
-  const preLockBoard = state.board;
-  const wasRotation = state.lastActionRotation;
+  const spin = detectSpin(state.board, landedPiece, state.lastActionRotation, state.lastRotationTstKick);
 
   const locked = lockPiece(state.board, state.active);
   const { board: clearedBoard, linesCleared } = clearLines(locked);
@@ -161,7 +162,7 @@ function lockAndSpawn(state: GameState): void {
   state.level = Math.floor(state.lines / 10) + 1;
 
   // Fire versus hook (may modify state.board to inject garbage)
-  lockHook?.(state, linesCleared, landedPiece, preLockBoard, wasRotation);
+  lockHook?.(state, linesCleared, landedPiece, spin);
   state.lastActionRotation = false;
 
   if (state.variant === 'sprint' && state.lines >= 40) {
@@ -195,14 +196,16 @@ function lockAndSpawn(state: GameState): void {
 function tryMove(state: GameState, dx: number, dy: number): boolean {
   if (collides(state.board, state.active, dx, dy)) return false;
   state.active = { ...state.active, x: state.active.x + dx, y: state.active.y + dy };
+  state.lastActionRotation = false; // any successful shift or fall cancels a spin
   return true;
 }
 
 function tryRotate(state: GameState, delta: number): boolean {
-  const rotated = attemptRotation(state.board, state.active, delta);
+  const rotated = attemptRotationWithKick(state.board, state.active, delta);
   if (!rotated) return false;
-  state.active = rotated;
+  state.active = rotated.piece;
   state.lastActionRotation = true;
+  state.lastRotationTstKick = isTstKick(rotated.piece.type, delta, rotated.kickIndex, rotated.piece.rotationIndex);
   return true;
 }
 
@@ -225,6 +228,7 @@ function tryHold(state: GameState): void {
 
 function hardDrop(state: GameState): void {
   const dropDist = hardDropY(state.board, state.active) - state.active.y;
+  if (dropDist > 0) state.lastActionRotation = false;
   state.score += dropDist * 2;
   state.active = { ...state.active, y: state.active.y + dropDist };
   lockAndSpawn(state);
@@ -339,6 +343,7 @@ export function processFrame(
     const ghostY = hardDropY(state.board, state.active);
     if (ghostY !== state.active.y) {
       state.active = { ...state.active, y: ghostY };
+      state.lastActionRotation = false;
       resetTransientState(state);
     }
   }

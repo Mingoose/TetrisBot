@@ -1,6 +1,7 @@
 import type { CellValue } from './types';
 import type { EngineAnalysis, EngineMove } from './engine';
 import { PIECE_COLORS, getRotation } from './pieces';
+import { SPIN_NONE, clearLabel as rulesClearLabel } from './rules';
 import { CELL_SIZE, BOARD_OFFSET_X, BOARD_OFFSET_Y } from './editor';
 import { BOARD_COLS, BOARD_ROWS } from './board';
 import { BOARD_W, BOARD_H, CANVAS_W, CANVAS_H, VERSUS_CANVAS_W } from './renderer';
@@ -18,18 +19,7 @@ const SELECTED_HEADER_H = 26;
 const ROT_LABELS = ['0', 'R', '2', 'L'];
 
 function clearLabel(m: EngineMove): string {
-  if (m.isPerfectClear) return 'PC';
-  if (m.isTSpin) {
-    if (m.linesCleared === 0) return 'TS';
-    if (m.linesCleared === 1) return 'TSS';
-    if (m.linesCleared === 2) return 'TSD';
-    if (m.linesCleared === 3) return 'TST';
-  }
-  if (m.linesCleared === 1) return 'Single';
-  if (m.linesCleared === 2) return 'Double';
-  if (m.linesCleared === 3) return 'Triple';
-  if (m.linesCleared === 4) return 'Tetris';
-  return '';
+  return rulesClearLabel(m.pieceType, m.linesCleared, m.spin, m.isPerfectClear);
 }
 
 /**
@@ -302,7 +292,7 @@ function drawPanel(
         // Clear label
         if (cl) {
           const clColor = mv.isPerfectClear ? '#ffdd44'
-            : mv.isTSpin                   ? '#44ffcc'
+            : mv.spin !== SPIN_NONE        ? '#44ffcc'
             : mv.linesCleared === 4        ? '#ff8844'
             : '#99cc99';
           ctx.fillStyle = clColor;

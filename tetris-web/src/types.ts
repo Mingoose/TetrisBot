@@ -41,5 +41,6 @@ export interface GameState extends Snapshot {
   countdownMs: number;          // ms remaining in pre-game countdown (sprint/versus)
   sprintStartTime: number;      // rAF timestamp when sprint became 'playing'; 0 = not started
   sprintElapsedMs: number;      // frozen at sprint-complete for display
-  lastActionRotation: boolean;  // true if last player action was a rotation; for T-spin detection
+  lastActionRotation: boolean;  // true if the last successful action was a rotation; for spin detection
+  lastRotationTstKick: boolean; // that rotation used the T-spin triple / fin kick (upgrades a mini to full)
 }

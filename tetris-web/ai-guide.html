@@ -338,55 +338,56 @@
       important as keeping a clean board.
     </p>
 
+    <p>
+      Attack follows TETR.IO's multiplayer rules (All-Mini+ spins, multiplier combos, B2B surge).
+      The full logic lives in <code>src/rules.ts</code>.
+    </p>
+
     <h3>Base attack values</h3>
     <table>
-      <thead><tr><th>Clear type</th><th>Lines sent</th><th>Qualifies for B2B?</th></tr></thead>
+      <thead><tr><th>Lines</th><th>Normal</th><th>Spin mini</th><th>Full T-spin</th></tr></thead>
       <tbody>
-        <tr><td>Single (1 line)</td><td>0</td><td>No</td></tr>
-        <tr><td>Double (2 lines)</td><td>1</td><td>No</td></tr>
-        <tr><td>Triple (3 lines)</td><td>2</td><td>No</td></tr>
-        <tr><td>Tetris (4 lines)</td><td>4</td><td>Yes</td></tr>
-        <tr><td>T-spin single</td><td>2</td><td>Yes</td></tr>
-        <tr><td>T-spin double (TSD)</td><td>4</td><td>Yes</td></tr>
-        <tr><td>T-spin triple (TST)</td><td>6</td><td>Yes</td></tr>
-        <tr><td>Perfect clear</td><td>10</td><td>—</td></tr>
+        <tr><td>1</td><td>0</td><td>0</td><td>2</td></tr>
+        <tr><td>2</td><td>1</td><td>1</td><td>4</td></tr>
+        <tr><td>3</td><td>2</td><td>2</td><td>6</td></tr>
+        <tr><td>4 (quad)</td><td>4</td><td>10</td><td>10</td></tr>
       </tbody>
     </table>
 
-    <h3>Back-to-back bonus (+1)</h3>
+    <h3>Spins (All-Mini+)</h3>
     <p>
-      Chaining two or more qualifying clears (Tetris or any T-spin) in a row without a non-qualifying
-      clear in between grants <strong>+1 line</strong> to every qualifying clear after the first.
-      The <code>b2bActive</code> flag in the internal engine tracks this, but it is not currently
-      exposed on the <code>bot</code> object — you would need to track it yourself.
+      A placement is a spin only if the piece's last action before locking was a rotation. The built-in
+      game credits your returned placement with the best spin a final rotation into that position could
+      earn.
     </p>
-    <table>
-      <thead><tr><th>Clear type</th><th>Normal</th><th>Back-to-back</th></tr></thead>
-      <tbody>
-        <tr><td>Tetris</td><td>4</td><td>5</td></tr>
-        <tr><td>T-spin single</td><td>2</td><td>3</td></tr>
-        <tr><td>T-spin double</td><td>4</td><td>5</td></tr>
-        <tr><td>T-spin triple</td><td>6</td><td>7</td></tr>
-      </tbody>
-    </table>
+    <ul>
+      <li><strong>T-spins:</strong> at least 3 of the 4 corners around the T are filled (walls and floor
+        count). It is a <em>full</em> T-spin if both corners the T points toward are filled, or if the
+        rotation used the T-spin-triple kick; otherwise it is a <em>mini</em>.</li>
+      <li><strong>All other pieces (and a T that fails the corner rule):</strong> a <em>mini</em> spin if
+        the piece cannot move left, right, up or down after rotating in.</li>
+    </ul>
+    <p>Minis send little on their own; their value is that they count for back-to-back.</p>
 
-    <h3>Combo bonus</h3>
+    <h3>Back-to-back and surge</h3>
     <p>
-      Clearing at least one line on consecutive pieces earns a cumulative combo bonus added on top
-      of the base attack. The combo counter resets the moment you lock a piece without clearing.
-      This game uses the Jstris combo table:
+      Spins of any kind and quads are B2B-qualifying. Each qualifying clear raises your B2B level;
+      while it is 1 or more, every clear gets <strong>+1 line</strong>. A non-qualifying clear resets it
+      (locking without clearing does not). Once the level reaches 4, breaking it releases a
+      <strong>surge</strong>: level 4 sends 4 extra lines, and each level above adds 1 more
+      (level 8 sends 8). The B2B level is not exposed on the <code>bot</code> object, so track it yourself.
     </p>
-    <table>
-      <thead><tr><th>Combo count</th><th>Bonus lines</th></tr></thead>
-      <tbody>
-        <tr><td>1st, 2nd clear</td><td>+0</td></tr>
-        <tr><td>3rd, 4th</td><td>+1</td></tr>
-        <tr><td>5th, 6th</td><td>+2</td></tr>
-        <tr><td>7th, 8th</td><td>+3</td></tr>
-        <tr><td>9th, 10th, 11th</td><td>+4</td></tr>
-        <tr><td>12th+</td><td>+5</td></tr>
-      </tbody>
-    </table>
+
+    <h3>Combo multiplier</h3>
+    <p>
+      Consecutive line clears build a combo. From the second clear in a row, attack is multiplied by
+      <code>1 + 0.25 &times; combo</code> (combo counts from 0 at the first clear), and from the third clear
+      on it is at least <code>ln(1 + 1.25 &times; combo)</code>, so long chains of singles still send
+      garbage. The result is rounded down.
+    </p>
+
+    <h3>Perfect clear</h3>
+    <p>Emptying the board sends <strong>3 extra lines</strong> and raises B2B by 2 without breaking it.</p>
 
     <h3>Cancellation</h3>
     <p>
@@ -397,9 +398,9 @@
     </p>
 
     <div class="callout tip">
-      <p><strong>Efficiency note:</strong> T-spin doubles (4 lines sent for 2 lines cleared) and
-      back-to-back Tetrises (5 lines sent for 4 cleared) are the most lines-sent-per-piece-used
-      at high level. A sustained combo — even with doubles — can exceed both if the board stays clean.</p>
+      <p><strong>Efficiency note:</strong> T-spin doubles (4 lines for 2 cleared) and quads are the
+      core of attack, and B2B makes every one of them worth +1. Mini spins with other pieces keep a
+      B2B chain alive between T-spins and quads, building surge for when the chain finally breaks.</p>
     </div>
 
     <!-- ── RETURN VALUE ──────────────────────────────────────── -->
@@ -935,7 +936,7 @@ function getBestMove(bot, pendingGarbage) {
       <li>Keep a well column — one intentionally low column reserved for the I piece. Reward boards where exactly one column is meaningfully lower than its neighbours. This is how the built-in AI maintains a Tetris lane.</li>
       <li>React to <code>pendingGarbage &gt; 4</code> by weighting line clears more heavily in <code>evaluate()</code>. Survival first, offensive play second.</li>
       <li>For T-spin play: reward placements that leave a T-shaped gap with three corners filled (TSD/TST slot). The attack efficiency of a T-spin double matches a Tetris at 4 lines each, but requires only 2 rows of setup instead of 4.</li>
-      <li>Track combos yourself if you want to factor them in: after each line clear, increment a counter; reset it on any zero-clear lock. A 5-combo adds +2 to every clear's attack value — worth preserving if the board allows it.</li>
+      <li>Track combos yourself if you want to factor them in: after each line clear, increment a counter; reset it on any zero-clear lock. Each step of combo multiplies attack by a further 0.25 (a TSD at combo 4 sends 8), so chains are worth preserving if the board allows it.</li>
       <li>Use <code>console.log()</code> freely — output appears in browser DevTools and doesn't affect play.</li>
       <li>Profile with <code>performance.now()</code> to ensure you stay well under 2 s even on slow machines. A two-piece lookahead over all 7 pieces × 4 rotations × 10 columns (280 states per level) runs in microseconds — the budget is generous.</li>
     </ul>

@@ -1,5 +1,6 @@
 import { ActivePiece, CellValue, PieceType } from './types';
-import { getRotation, getWallKicks } from './pieces';
+import { getRotation, getKicks } from './pieces';
+import { SpinKind, T_CORNERS, T_FRONT_CORNERS, classifySpin } from './rules';
 
 export const BOARD_COLS = 10;
 export const BOARD_ROWS = 20;
@@ -140,33 +141,51 @@ export function addGarbageLines(board: CellValue[][], lines: number, gapCol: num
   return [...shifted, ...Array.from({ length: lines }, makeRow)];
 }
 
-// Apply a rotation (delta = +1 CW, -1 CCW, +2 180°) with SRS wall kicks.
+// Apply a rotation (delta = +1 CW, -1 CCW, +2 180°) with SRS+ wall kicks.
 // Returns the rotated piece if any kick succeeds, or null if all kicks are blocked.
 export function attemptRotation(board: CellValue[][], piece: ActivePiece, delta: number): ActivePiece | null {
+  return attemptRotationWithKick(board, piece, delta)?.piece ?? null;
+}
+
+// Same as attemptRotation, also reporting which kick test succeeded (0 = no kick).
+export function attemptRotationWithKick(
+  board: CellValue[][],
+  piece: ActivePiece,
+  delta: number,
+): { piece: ActivePiece; kickIndex: number } | null {
   const newIndex = ((piece.rotationIndex + delta) % 4 + 4) % 4;
-  // CW / 180°: use kicks from the 'from' state. CCW: use negated kicks from the 'to' state.
-  const kickIndex = delta > 0 ? piece.rotationIndex : newIndex;
-  const kicks = getWallKicks(piece.type, kickIndex);
-  const kickList: Array<[number, number]> = delta < 0
-    ? kicks.map(([dx, dy]) => [-dx, -dy] as [number, number])
-    : kicks;
-  for (const [kdx, kdy] of kickList) {
+  const kickList = getKicks(piece.type, piece.rotationIndex, newIndex);
+  for (let k = 0; k < kickList.length; k++) {
+    const [kdx, kdy] = kickList[k];
     const candidate: ActivePiece = { ...piece, rotationIndex: newIndex, x: piece.x + kdx, y: piece.y + kdy };
-    if (!collides(board, candidate, 0, 0)) return candidate;
+    if (!collides(board, candidate, 0, 0)) return { piece: candidate, kickIndex: k };
   }
   return null;
 }
 
-// Count how many of the 4 corners of a T piece's 3×3 bounding box are occupied
-// (either by board cells or out-of-bounds). Used for 3-corner T-spin detection.
-export function countTSpinCorners(board: CellValue[][], piece: ActivePiece): number {
-  const corners: [number, number][] = [
-    [piece.y,     piece.x    ],
-    [piece.y,     piece.x + 2],
-    [piece.y + 2, piece.x    ],
-    [piece.y + 2, piece.x + 2],
-  ];
-  return corners.filter(([r, c]) =>
-    r < 0 || r >= BOARD_ROWS || c < 0 || c >= BOARD_COLS || board[r][c] !== 0,
-  ).length;
+// Spin kind for a piece about to lock (see rules.ts). Corners outside the
+// board count as filled.
+export function detectSpin(
+  board: CellValue[][],
+  piece: ActivePiece,
+  rotatedLast: boolean,
+  tstKick: boolean,
+): SpinKind {
+  if (!rotatedLast) return 0;
+  let corners = 0;
+  let front = 0;
+  if (piece.type === 'T') {
+    const [f0, f1] = T_FRONT_CORNERS[piece.rotationIndex];
+    for (let i = 0; i < 4; i++) {
+      const r = piece.y + T_CORNERS[i][0];
+      const c = piece.x + T_CORNERS[i][1];
+      if (r < 0 || r >= BOARD_ROWS || c < 0 || c >= BOARD_COLS || board[r][c] !== 0) {
+        corners++;
+        if (i === f0 || i === f1) front++;
+      }
+    }
+  }
+  const immobile = collides(board, piece, -1, 0) && collides(board, piece, 1, 0)
+    && collides(board, piece, 0, -1) && collides(board, piece, 0, 1);
+  return classifySpin(piece.type, rotatedLast, corners, front, immobile, tstKick);
 }

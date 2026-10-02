@@ -1,10 +1,12 @@
 import { ActivePiece, CellValue, PieceType } from './types';
 import type { EngineMove, EngineRequest, EngineAnalysis } from './engine';
 import { BOARD_COLS, BOARD_ROWS } from './board';
-import { getRotation, getWallKicks } from './pieces';
+import { getRotation, getKicks } from './pieces';
 import { Bag } from './bag';
 import type { BotBoard } from './versus';
-import { computeGarbage } from './versus';
+import {
+  SpinKind, SPIN_NONE, SPIN_FULL, T_CORNERS, T_FRONT_CORNERS, classifySpin, isTstKick, resolveClear,
+} from './rules';
 
 const BEAM_WIDTH = 20;
 const SEARCH_DEPTH = 4;
@@ -32,7 +34,7 @@ interface PlacementResult {
   rotationIndex: number;
   x: number;
   y: number;
-  isTSpin: boolean;
+  spin: SpinKind; // best spin available by rotating into this position as the last action
 }
 
 // Pre-allocated BFS buffers — eliminates per-call Set<string> and Map<string,…>
@@ -55,6 +57,9 @@ let bfsGen = 0;
 // Encoding: (rot << 10) | ((y + BFS_Y_OFF) << 5) | (x + BFS_X_OFF)
 // Max reachable states = 4 × BFS_SLOT = 1728; buffer is exactly that size.
 const bfsQueue = new Uint16Array(4 * BFS_SLOT);
+// Best spin reachable by rotating into each state this call (valid where bfsSpinGen === gen).
+const bfsSpin    = new Uint8Array(4 * BFS_SLOT);
+const bfsSpinGen = new Uint32Array(4 * BFS_SLOT);
 
 function bfsIdx(rot: number, x: number, y: number): number {
   return rot * BFS_SLOT + (y + BFS_Y_OFF) * BFS_X_SIZE + (x + BFS_X_OFF);
@@ -127,7 +132,8 @@ function bmCollides(bm: Uint16Array, piece: ActivePiece, dx: number, dy: number)
     if (!masks[r]) continue;
     const br = ny + r;
     if (br >= BOARD_ROWS) return true;
-    if (br < 0) continue;
+    // Walls are checked even above the visible board (br < 0): a kick can lift a
+    // piece above row 0, and it must not slide past the walls from there.
     let shifted: number;
     if (nx >= 0) {
       shifted = masks[r] << nx;
@@ -138,7 +144,7 @@ function bmCollides(bm: Uint16Array, piece: ActivePiece, dx: number, dy: number)
       shifted = masks[r] >> nabs;
     }
     if (shifted & ~BM_FULL_ROW) return true; // bits beyond right wall
-    if (shifted & bm[br]) return true;       // board cell occupied
+    if (br >= 0 && (shifted & bm[br])) return true; // board cell occupied
   }
   return false;
 }
@@ -172,16 +178,16 @@ function bmLockAndClear(bm: Uint16Array, piece: ActivePiece): { bm: Uint16Array;
   return { bm: compact, linesCleared };
 }
 
+// Index of the SRS kick test the last successful bmAttemptRotation used.
+let bmLastKickIndex = 0;
+
 function bmAttemptRotation(bm: Uint16Array, piece: ActivePiece, delta: number): ActivePiece | null {
   const newIndex = ((piece.rotationIndex + delta) % 4 + 4) % 4;
-  const kickIndex = delta > 0 ? piece.rotationIndex : newIndex;
-  const kicks = getWallKicks(piece.type, kickIndex);
-  const kickList: Array<[number, number]> = delta < 0
-    ? kicks.map(([dx, dy]) => [-dx, -dy] as [number, number])
-    : kicks;
-  for (const [kdx, kdy] of kickList) {
+  const kickList = getKicks(piece.type, piece.rotationIndex, newIndex);
+  for (let k = 0; k < kickList.length; k++) {
+    const [kdx, kdy] = kickList[k];
     const candidate: ActivePiece = { ...piece, rotationIndex: newIndex, x: piece.x + kdx, y: piece.y + kdy };
-    if (!bmCollides(bm, candidate, 0, 0)) return candidate;
+    if (!bmCollides(bm, candidate, 0, 0)) { bmLastKickIndex = k; return candidate; }
   }
   return null;
 }
@@ -198,12 +204,26 @@ function bmCountTSpinCorners(bm: Uint16Array, piece: ActivePiece): number {
   return count;
 }
 
-function bmIsTSpinPlacement(bm: Uint16Array, piece: ActivePiece): boolean {
-  if (piece.type !== 'T') return false;
-  if (bmCountTSpinCorners(bm, piece) < 3) return false;
-  const atTop: ActivePiece = { ...piece, y: 0 };
-  if (!bmCollides(bm, atTop, 0, 0) && bmHardDropY(bm, atTop) === piece.y) return false;
-  return true;
+function bmCornerFilled(bm: Uint16Array, r: number, c: number): boolean {
+  return r < 0 || r >= BOARD_ROWS || c < 0 || c >= BOARD_COLS || (bm[r] & (1 << c)) !== 0;
+}
+
+// Spin kind for a grounded piece that just rotated into place (see rules.ts).
+function bmSpinAfterRotation(bm: Uint16Array, piece: ActivePiece, tstKick: boolean): SpinKind {
+  let corners = 0;
+  let front = 0;
+  if (piece.type === 'T') {
+    const [f0, f1] = T_FRONT_CORNERS[piece.rotationIndex];
+    for (let i = 0; i < 4; i++) {
+      if (bmCornerFilled(bm, piece.y + T_CORNERS[i][0], piece.x + T_CORNERS[i][1])) {
+        corners++;
+        if (i === f0 || i === f1) front++;
+      }
+    }
+  }
+  const immobile = bmCollides(bm, piece, -1, 0) && bmCollides(bm, piece, 1, 0)
+    && bmCollides(bm, piece, 0, -1) && bmCollides(bm, piece, 0, 1);
+  return classifySpin(piece.type, true, corners, front, immobile, tstKick);
 }
 
 // BFS over all reachable (rotationIndex, x, y) positions, starting from the spawn
@@ -225,6 +245,7 @@ function findReachablePlacements(bm: Uint16Array, pieceType: PieceType): Placeme
   let qHead = 0;
   let qTail = 0;
   const grounded: PlacementResult[] = [];
+  const groundedIdx: number[] = [];
 
   bfsVisit[bfsIdx(0, startX, 0)] = gen;
   bfsQueue[qTail++] = (0 << 10) | ((0 + BFS_Y_OFF) << 5) | (startX + BFS_X_OFF);
@@ -239,12 +260,8 @@ function findReachablePlacements(bm: Uint16Array, pieceType: PieceType): Placeme
       const gk = bfsIdx(cur.rotationIndex, cur.x, cur.y);
       if (bfsGround[gk] !== gen) {
         bfsGround[gk] = gen;
-        grounded.push({
-          rotationIndex: cur.rotationIndex,
-          x: cur.x,
-          y: cur.y,
-          isTSpin: bmIsTSpinPlacement(bm, cur),
-        });
+        grounded.push({ rotationIndex: cur.rotationIndex, x: cur.x, y: cur.y, spin: SPIN_NONE });
+        groundedIdx.push(gk);
       }
     }
 
@@ -272,7 +289,17 @@ function findReachablePlacements(bm: Uint16Array, pieceType: PieceType): Placeme
     for (const delta of [1, -1, 2] as const) {
       const next = bmAttemptRotation(bm, cur, delta);
       if (!next) continue;
+      // Repeated upward kicks on a tall stack can lift a piece above what the
+      // queue encoding holds; a negative y field would corrupt the rotation bits.
+      if (next.y < -BFS_Y_OFF) continue;
       const nk = bfsIdx(next.rotationIndex, next.x, next.y);
+      // Locking right after this rotation may score a spin. Record the best one per
+      // state, even if the state was already reached another way.
+      if (bmCollides(bm, next, 0, 1)) {
+        const spin = bmSpinAfterRotation(bm, next, isTstKick(pieceType, delta, bmLastKickIndex, next.rotationIndex));
+        if (bfsSpinGen[nk] !== gen) { bfsSpinGen[nk] = gen; bfsSpin[nk] = spin; }
+        else if (spin > bfsSpin[nk]) bfsSpin[nk] = spin;
+      }
       if (bfsVisit[nk] !== gen) {
         bfsVisit[nk] = gen;
         bfsQueue[qTail++] = (next.rotationIndex << 10) | ((next.y + BFS_Y_OFF) << 5) | (next.x + BFS_X_OFF);
@@ -280,7 +307,24 @@ function findReachablePlacements(bm: Uint16Array, pieceType: PieceType): Placeme
     }
   }
 
+  // Rotations into a grounded state can be found after the state itself was
+  // dequeued, so spins are filled in once the search is complete.
+  for (let i = 0; i < grounded.length; i++) {
+    const gk = groundedIdx[i];
+    if (bfsSpinGen[gk] === gen) grounded[i].spin = bfsSpin[gk] as SpinKind;
+  }
   return grounded;
+}
+
+// Spin a bot earns for a placement: the best available by rotating into it last.
+// Bots send only a final position, so this credits them with the best legal
+// finesse, as a player could. Unreachable positions score no spin.
+export function placementSpin(board: CellValue[][], piece: ActivePiece): SpinKind {
+  const bm = cellBoardToBm(board);
+  for (const p of findReachablePlacements(bm, piece.type)) {
+    if (p.rotationIndex === piece.rotationIndex && p.x === piece.x && p.y === piece.y) return p.spin;
+  }
+  return SPIN_NONE;
 }
 
 // ---- Evaluation weights ----
@@ -328,6 +372,8 @@ const W = {
 
   // Back-to-back state
   b2bBonus:         0.50,  // flat reward for having B2B active after this placement
+  b2bLevel:         0.0,   // extra reward per B2B level (surge charges from level 4)
+  b2bLevelCap:      10,    // levels beyond this add nothing
 
   // Combo awareness
   comboBonus:       0.35,  // reward per combo level (combo+1 when active, 0 when broken)
@@ -343,6 +389,15 @@ const W = {
   garbageClearBonus: 0.4,
   garbageUrgency:   -0.3,
 };
+
+// Override hard-mode weights, for tuning experiments (the self-play harness's
+// --weights). Unknown keys are rejected so a typo can't silently do nothing.
+export function setWeights(overrides: Record<string, number | number[]>): void {
+  for (const [k, v] of Object.entries(overrides)) {
+    if (!(k in W)) throw new Error(`Unknown weight: ${k}`);
+    (W as Record<string, unknown>)[k] = v;
+  }
+}
 
 
 function initHeightArray(): number[] {
@@ -479,7 +534,7 @@ const W_MEDIUM = {
 function evaluateBoardMedium(
   bm: Uint16Array,
   linesCleared: number,
-  isTSpin: boolean = false,
+  spin: SpinKind = SPIN_NONE,
   pendingGarbage: number = 0,
   placedType?: PieceType,
 ): number {
@@ -532,8 +587,8 @@ function evaluateBoardMedium(
             + W_MEDIUM.cliffPenalty  * cliffPenalty
             - dangerPenalty;
 
-  if (isTSpin && linesCleared > 0) score += W_MEDIUM.tspinClearBonus * linesCleared;
-  if (placedType === 'T' && !isTSpin) score += W_MEDIUM.wastedTPenalty;
+  if (placedType === 'T' && spin === SPIN_FULL && linesCleared > 0) score += W_MEDIUM.tspinClearBonus * linesCleared;
+  if (placedType === 'T' && spin === SPIN_NONE) score += W_MEDIUM.wastedTPenalty;
   score += scoreTSpinReadiness(bm) * W_MEDIUM.tslotBonus;
 
   if (pendingGarbage > 0) {
@@ -621,7 +676,7 @@ function expandBeamNodeMedium(node: BeamNodeMedium, pendingGarbage: number): Bea
       };
       const { bm: clearedBoard, linesCleared } = bmLockAndClear(node.board, piece);
       const moveScore = evaluateBoardMedium(
-        clearedBoard, linesCleared, placement.isTSpin, pendingGarbage, opt.pieceType,
+        clearedBoard, linesCleared, placement.spin, pendingGarbage, opt.pieceType,
       );
 
       const firstMove = node.firstMove ?? {
@@ -686,7 +741,7 @@ export function findBestMove(
   beamWidth: number = BEAM_WIDTH,
   searchDepth: number = SEARCH_DEPTH,
   _combo: number = -1,       // unused by medium eval — included for API consistency with findBestMoveHard
-  _b2bActive: boolean = false,
+  _b2b: number = -1,
 ): { rotationIndex: number; x: number; y: number; useHold: boolean } {
   const rootBm = cellBoardToBm(bot.board);
   let beam: BeamNodeMedium[] = [{
@@ -721,7 +776,7 @@ export function findBestMove(
 export function analyzePositionHard(request: EngineRequest): EngineAnalysis {
   const t0 = performance.now();
   const { board, activeType, nextQueue, hold, holdUsed, bagState,
-          combo, b2bActive, pendingGarbage, beamWidth, searchDepth, topN } = request;
+          combo, b2b, pendingGarbage, beamWidth, searchDepth, topN } = request;
 
   const rootBm = cellBoardToBm(board);
   const targetWellCol = pickTargetWellCol(rootBm);
@@ -736,7 +791,7 @@ export function analyzePositionHard(request: EngineRequest): EngineAnalysis {
     score: 0,
     garbageSent: 0,
     combo: combo ?? -1,
-    b2bActive: b2bActive ?? false,
+    b2b: b2b ?? -1,
     targetWellCol,
     heights: computeColumnHeightsBm(rootBm),
     firstMove: null,
@@ -787,7 +842,7 @@ export function analyzePositionHard(request: EngineRequest): EngineAnalysis {
 export function evaluateBoard(
   bm: Uint16Array,
   linesCleared: number,
-  isTSpin: boolean = false,
+  spin: SpinKind = SPIN_NONE,
   pendingGarbage: number = 0,
   placedType?: PieceType,
   targetWellCol: number = BOARD_COLS - 1,
@@ -795,7 +850,7 @@ export function evaluateBoard(
   tInLookahead: boolean = true,
   preHeights?: number[],
   combo: number = -1,
-  b2bActive: boolean = false,
+  b2b: number = -1,
 ): number {
   // Perfect clear: board is completely empty after this placement.
   let boardEmpty = true;
@@ -922,8 +977,9 @@ export function evaluateBoard(
             + W.landingHeight   * landingHeight
             - dangerPenalty;
 
-  if (isTSpin && linesCleared > 0) score += W.tspinClearBonus * linesCleared;
-  if (placedType === 'T' && !isTSpin) score += W.wastedTPenalty;
+  // Full T-spins get the shape bonus; minis are paid through attack and B2B instead.
+  if (placedType === 'T' && spin === SPIN_FULL && linesCleared > 0) score += W.tspinClearBonus * linesCleared;
+  if (placedType === 'T' && spin === SPIN_NONE) score += W.wastedTPenalty;
   // Only run the expensive T-slot scan when a T-piece is actually in the lookahead.
   // T appears once per 7-bag, so this skips the call ~85% of evaluations.
   if (tInLookahead) score += scoreTSpinReadiness(bm) * W.tslotBonus;
@@ -935,8 +991,8 @@ export function evaluateBoard(
   }
 
   // Back-to-back: flat bonus for having B2B active after this placement.
-  // Preserves the incentive to keep firing T-spins/Tetrises rather than breaking the streak.
-  if (b2bActive) score += W.b2bBonus;
+  // Preserves the incentive to keep firing spins/quads rather than breaking the streak.
+  if (b2b >= 0) score += W.b2bBonus + W.b2bLevel * Math.min(b2b, W.b2bLevelCap);
 
   // Combo streak: reward for having an active streak after this placement.
   // combo >= 0 means at least one consecutive clear; scale linearly so longer streaks
@@ -970,7 +1026,7 @@ interface BeamNodeHard {
   score: number;         // current board shape quality — used for beam pruning at each step
   garbageSent: number;   // total garbage lines sent along this search path
   combo: number;         // current combo index (-1 = no streak)
-  b2bActive: boolean;    // back-to-back T-spin/Tetris qualifier active
+  b2b: number;           // B2B level (-1 = none, 0 = first qualifying clear)
   targetWellCol: number; // fixed well column for the entire search (set once at root)
   heights: number[];     // column heights — maintained incrementally to skip empty rows in evaluateBoard
   firstMove: { rotationIndex: number; x: number; y: number; useHold: boolean } | null;
@@ -1052,23 +1108,13 @@ function expandBeamNodeHardHard(node: BeamNodeHard, pendingGarbage: number): Bea
         y: placement.y,
       };
       const { bm: clearedBoard, linesCleared } = bmLockAndClear(node.board, piece);
-      // Advance combo/b2b state for this placement.
-      let nextCombo: number;
-      let nextB2b: boolean;
-      if (linesCleared > 0) {
-        nextCombo = node.combo < 0 ? 0 : node.combo + 1;
-        nextB2b = placement.isTSpin || linesCleared === 4;
-      } else {
-        nextCombo = -1;
-        nextB2b = node.b2bActive; // b2b only resets on a non-qualifying clear, not on 0 lines
-      }
-
-      // Compute garbage using the pre-placement b2b and the post-increment combo index.
-      let isPerfectClear = true;
-      for (let r = 0; r < BOARD_ROWS; r++) { if (clearedBoard[r]) { isPerfectClear = false; break; } }
-      const garbageOut = isPerfectClear
-        ? 10
-        : computeGarbage(linesCleared, placement.isTSpin, node.b2bActive, nextCombo);
+      // Advance combo/B2B and compute attack under the shared rules.
+      let isPerfectClear = linesCleared > 0;
+      for (let r = 0; isPerfectClear && r < BOARD_ROWS; r++) { if (clearedBoard[r]) isPerfectClear = false; }
+      const clear = resolveClear(node.combo, node.b2b, linesCleared, placement.spin, isPerfectClear);
+      const nextCombo = clear.combo;
+      const nextB2b = clear.b2b;
+      const garbageOut = clear.attack;
 
       // Update heights incrementally: if no lines cleared, only the columns the placed
       // piece touches can change. On a line clear, rows shift so a full rescan is needed.
@@ -1095,7 +1141,7 @@ function expandBeamNodeHardHard(node: BeamNodeHard, pendingGarbage: number): Bea
       // Higher value = piece landed near top = dangerous; penalised via W.landingHeight.
       const landingHeight = BOARD_ROWS - piece.y;
       const boardScore = evaluateBoard(
-        clearedBoard, linesCleared, placement.isTSpin, pendingGarbage,
+        clearedBoard, linesCleared, placement.spin, pendingGarbage,
         opt.pieceType, node.targetWellCol, landingHeight, tInLookahead, nextHeights, nextCombo, nextB2b,
       );
 
@@ -1115,7 +1161,7 @@ function expandBeamNodeHardHard(node: BeamNodeHard, pendingGarbage: number): Bea
             y: placement.y,
             useHold: opt.useHold,
             linesCleared,
-            isTSpin: placement.isTSpin,
+            spin: placement.spin,
             isPerfectClear,
           } satisfies EngineMove]
         : null;
@@ -1130,7 +1176,7 @@ function expandBeamNodeHardHard(node: BeamNodeHard, pendingGarbage: number): Bea
         score: boardScore,
         garbageSent: node.garbageSent + garbageOut,
         combo: nextCombo,
-        b2bActive: nextB2b,
+        b2b: nextB2b,
         targetWellCol: node.targetWellCol,
         heights: nextHeights,
         firstMove,
@@ -1158,7 +1204,7 @@ export async function findBestMoveCNN(
   beamWidth: number = 20,
   searchDepth: number = 3,
   combo: number = -1,
-  b2bActive: boolean = false,
+  b2b: number = -1,
   evalFn: (boards: CellValue[][][]) => Promise<Float32Array>,
 ): Promise<{ rotationIndex: number; x: number; y: number; useHold: boolean }> {
   const rootBm = cellBoardToBm(bot.board);
@@ -1174,7 +1220,7 @@ export async function findBestMoveCNN(
     score: 0,
     garbageSent: 0,
     combo,
-    b2bActive,
+    b2b,
     targetWellCol,
     heights: computeColumnHeightsBm(rootBm),
     firstMove: null,
@@ -1212,7 +1258,7 @@ export function findBestMoveHard(
   beamWidth: number = BEAM_WIDTH,
   searchDepth: number = SEARCH_DEPTH,
   combo: number = -1,
-  b2bActive: boolean = false,
+  b2b: number = -1,
 ): { rotationIndex: number; x: number; y: number; useHold: boolean } {
   const rootBm = cellBoardToBm(bot.board);
   const rootHeights = computeColumnHeightsBm(rootBm);
@@ -1232,7 +1278,7 @@ export function findBestMoveHard(
     score: 0,
     garbageSent: 0,
     combo,
-    b2bActive,
+    b2b,
     targetWellCol,
     heights: rootHeights,
     firstMove: null,
