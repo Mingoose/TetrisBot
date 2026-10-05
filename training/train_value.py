@@ -81,6 +81,8 @@ def main():
     ap.add_argument('--hidden', type=int, default=128)
     ap.add_argument('--threads', type=int, default=4)
     ap.add_argument('--device', default='auto')
+    ap.add_argument('--train-fraction', type=float, default=1.0,
+                    help='train on this fraction of the training games; validation games stay the same')
     ap.add_argument('--patience', type=int, default=4,
                     help='stop after this many epochs without a better validation loss')
     ap.add_argument('--out', default='models/value_v1.pt')
@@ -100,15 +102,24 @@ def main():
     rng = np.random.default_rng(0)
     val_games = set(rng.choice(uniq, size=max(1, len(uniq) // 10), replace=False).tolist())
     is_val = np.array([g in val_games for g in games])
+    is_train = ~is_val
+    if args.train_fraction < 1.0:
+        # Subsample whole games, after the split, so runs with different
+        # fractions are scored on identical validation games.
+        train_games = np.array(sorted(set(uniq.tolist()) - val_games))
+        keep = set(np.random.default_rng(1).choice(
+            train_games, size=max(1, int(len(train_games) * args.train_fraction)), replace=False).tolist())
+        is_train &= np.array([g in keep for g in games])
 
     def make_ds(mask):
         return TensorDataset(torch.from_numpy(boards[mask]).float(),
                              torch.from_numpy(ctx[mask]),
                              torch.from_numpy((labels[mask] - mean) / std))
-    train_dl = DataLoader(make_ds(~is_val), batch_size=args.batch_size, shuffle=True)
+    train_dl = DataLoader(make_ds(is_train), batch_size=args.batch_size, shuffle=True)
     val_dl = DataLoader(make_ds(is_val), batch_size=args.batch_size * 4)
-    print(f'train {int((~is_val).sum())} / val {int(is_val.sum())} samples '
-          f'({len(uniq) - len(val_games)} / {len(val_games)} games)')
+    n_train_games = len(np.unique(games[is_train]))
+    print(f'train {int(is_train.sum())} / val {int(is_val.sum())} samples '
+          f'({n_train_games} / {len(val_games)} games)')
 
     model = ValueNet(args.channels, args.squeeze, args.hidden).to(device)
     n_params = sum(p.numel() for p in model.parameters())
