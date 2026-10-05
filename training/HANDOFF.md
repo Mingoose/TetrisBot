@@ -1,0 +1,146 @@
+# Handoff: training the v2 value network on the M1 Max
+
+Written 2026-10-05 for a Claude Code session on the user's M1 Max, continuing
+work started on their M1 MacBook (8 GB, 4 performance cores). Read the root
+`CLAUDE.md` first for the codebase; this file covers where the value-network
+project stands and what to do next.
+
+## The task right now
+
+Train three value networks on the self-play data already on this machine, run
+the T-slot probe, and send the results back to the other Mac. Concretely:
+
+1. Get the environment and data in place (checklist below).
+2. Run `training/run_v2.sh` (it checks the setup first, then trains all three
+   models in sequence and shows a macOS notification when done).
+3. Report the results (see "What to report").
+
+The user has been hitting setup errors running commands by hand — that is why
+this session exists. Do the setup and launching for them.
+
+## Setup checklist (all from `training/`)
+
+**Python environment.** `.venv` may not exist yet.
+```bash
+python3 --version          # PyTorch needs >= 3.10; Apple's built-in python3 is 3.9
+python3 -m venv .venv      # or, if 3.9: brew install python@3.12 && python3.12 -m venv .venv
+.venv/bin/pip install --upgrade pip
+.venv/bin/pip install torch numpy
+.venv/bin/python -c "import torch; print(torch.__version__, 'MPS:', torch.backends.mps.is_available())"
+```
+If MPS is available, training uses the GPU automatically (`--device auto`).
+On the other Mac (macOS 13) torch 2.11 reported MPS unavailable.
+
+**Data.** Both runs must be in `training/data/runs/` (gitignored, not in the repo):
+- `teacher-v2b/` — generated on this M1 Max (games 3000+, ~2,100 games).
+- `teacher-v2/` — generated on the other Mac (games 0–808, 216,293 positions),
+  sent over by AirDrop as `~/Downloads/teacher-v2.zip`. If not yet unpacked:
+  `unzip ~/Downloads/teacher-v2.zip -d data/runs/`
+- Verify: `ls data/runs/*/meta.json` lists both, and
+  `.venv/bin/python selfplay_data.py data/runs/teacher-v2 data/runs/teacher-v2b`
+  shows ~809 and ~2,100 games with the `spins … full / … mini` summary line.
+  Game ids must not overlap (0–808 vs 3000+).
+
+Make sure no self-play run is still writing to `teacher-v2b`
+(`pgrep -fl selfplay.mjs` should print nothing; stop with `pkill -f selfplay.mjs`).
+
+**Launch.**
+```bash
+nohup caffeinate -i ./run_v2.sh > data/logs/run_v2.out 2>&1 &
+tail -f data/logs/run_v2.out            # step start/done lines
+tail -f data/logs/train-v2.log          # per-epoch progress of the current model
+```
+Overrides: `DEVICE=cpu ./run_v2.sh` if MPS errors; `THREADS=8` default;
+`EXTRA="--epochs 1"` for a quick smoke test (used to verify the script).
+
+Expected time (estimates, not measured on this machine): ~780K training samples.
+CPU with 8 threads ≈ 2 min/epoch for the 32-channel model, 12–18 epochs with
+early stopping → whole script ~1–1¼ h. With MPS maybe 25–40 min. Multiply the
+first epoch's `(Ns)` by ~15 for a real estimate.
+
+## Pitfalls already hit
+
+- **zsh doesn't word-split `$VAR`.** `R="a b"; cmd $R` passes one argument in
+  zsh (macOS default shell). Write paths out or use a `sh` script (run_v2.sh does).
+- **"meta.json does not exist"** = a run folder path is wrong (usually the above).
+- **"no such file models/value_v2.pt"** = training failed earlier; read
+  `data/logs/train-v2.log`, not the probe error.
+- `source .venv/bin/activate` only lasts for that terminal; run_v2.sh calls
+  `.venv/bin/python` directly so activation doesn't matter.
+
+## What the three models test
+
+| Model | Command difference | Question it answers |
+|---|---|---|
+| `value_v2` | — (32 channels, all data) | The main model |
+| `value_v2_half` | `--train-fraction 0.5` | Would more data help? Same validation games as `value_v2` |
+| `value_v2_c16` | `--channels 16` | Is a ~4× cheaper model (for in-browser inference) nearly as good? |
+
+## What to report
+
+From each `data/logs/train-v2*.log`: best epoch, final `val loss`, `R²`, and
+the context-shuffled R² (last 3 lines). From `probe-v2*.txt`: the table.
+Then zip results for the other Mac:
+```bash
+zip -r ~/Downloads/v2-results.zip data/logs models/value_v2*.pt
+```
+
+How to read them:
+- **Full vs half:** if full-data R² is clearly higher than half-data, the model
+  is data-limited → generating more self-play data is worth it. If similar,
+  the bottleneck is labels or architecture.
+- **32 vs 16 channels:** if R² is within ~0.01, prefer 16 channels for the
+  browser.
+- **Context shuffle:** R² dropping noticeably when the piece context is
+  shuffled means the net uses the queue. The previous model (old rules, 190K
+  samples) went 0.189 → 0.120.
+- **T-slot probe:** the slot board should beat the flat board most when a T is
+  close (next / hold) and least when no T comes until the next bag. Previous
+  model: +0.93 (T in hold) … +0.60 (no T until next bag) — right direction, too
+  timid.
+
+## Project background
+
+**Goal.** A Tetris bot whose network judges a board *together with the upcoming
+pieces*, so it can search shallowly (1 ply, ~70 evaluations per move) instead
+of the hard bot's deep beam search (width 32, depth 5). The user's framing:
+"if I create the overhang and I have a T in the next few pieces then I should
+be fine — I don't need to compute the moves in between."
+
+**Plan.**
+1. ✅ Node self-play harness running the real `ai.ts` (`tetris-web/harness/`).
+2. ✅ Teacher data from the hard bot under TETR.IO rules (`teacher-v2`, `teacher-v2b`).
+3. ⏳ Train the value net (this step). Labels: discounted attack over the next
+   12 pieces, −10 if the bot dies in that window (`training/value_data.py`).
+4. Build the experimental difficulty as 1-ply search scored by the net, in the
+   browser (hand-written TS inference or a smaller model), within the 2 s
+   bot-move timeout.
+5. Play it against hard mode (bot-vs-bot); later, self-improvement rounds where
+   the net bot generates its own data.
+
+**Why the original CNN failed** (it is still in `cnnEvaluator.ts`): inference was
+numerically correct but TF.js CPU took ~13 ms/board (20–40 s per move); its
+labels were 93% identical; it never saw the queue or hold.
+
+**Rules.** The game targets TETR.IO multiplayer: All-Mini+ spins, multiplier
+combos, B2B level with surge, SRS+ kicks, garbage cap 8 / 20-frame travel /
+lands only on non-clearing locks. All in `tetris-web/src/rules.ts` and
+`versus.ts`; `npm run test:rules` verifies against Triangle.js.
+
+**Data provenance.**
+- `teacher-v2`, `teacher-v2b`: current rules — use these.
+- `teacher-v1`: old JStris-style rules — pipeline testing only, never mix.
+- `obsolete-teacher-v2-srs-oldgarbage`: pre-SRS+/garbage fix — don't use.
+- Known teacher quirk: the bot's search sees the true order of the remaining
+  bag, slightly more than a player knows; recorded data stores only the set.
+
+**User decisions to respect.**
+- Do **not** propose tuning the hard bot's weights with an optimiser (CMA-ES);
+  the user decided to use the current hard bot as the teacher.
+- The CNN should replace search depth, not sit beside a deep search.
+- AI style preferences: favour T-spin setups and B2B over single-line clears;
+  don't penalise interior wells.
+- The user is the only developer; commit straight to `main`, no PRs.
+
+**Throughput reference.** Hard teacher: ~190 ms/piece per core on the M1;
+data generation ~90K positions/hour on 4 cores there.

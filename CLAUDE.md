@@ -84,6 +84,10 @@ Twenty-four TypeScript source files in `src/`, each with a single responsibility
 
 **Controls (defaults):** `←/→` move (DAS=133ms, ARR=10ms), `↓` soft drop, `Space` hard drop, `↑/X` rotate CW, `Z` rotate CCW, `A` rotate 180°, `C/Shift` hold, `R` rewind, `E` editor mode, `P/Esc` pause. All bindings are remappable via the settings modal.
 
+## Value network training (`training/`)
+
+Self-play data from the harness trains a queue-aware value net (`value_data.py`, `value_net.py`, `train_value.py`). **Current status, next steps and setup pitfalls are in `training/HANDOFF.md` — read it before working on training.**
+
 ## Running the Bot
 
 ```bash
