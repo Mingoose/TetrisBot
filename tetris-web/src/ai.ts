@@ -327,6 +327,10 @@ export function placementSpin(board: CellValue[][], piece: ActivePiece): SpinKin
   return SPIN_NONE;
 }
 
+// Move generation and bitmask board helpers for other searchers (valueBot.ts).
+export { cellBoardToBm, bmCollides, bmLockAndClear, findReachablePlacements };
+export type { PlacementResult };
+
 // ---- Evaluation weights ----
 // All tunable scoring constants in one place.
 

@@ -48,8 +48,11 @@ def encode_context(next_piece, queue4, hold, bag_mask, combo, b2b, garbage_landi
 
 
 def build_samples(recs: np.ndarray, horizon: int = 12, gamma: float = 0.97,
-                  death_penalty: float = 10.0):
-    """Return (boards uint8 (N,20,10), ctx float32 (N,C), labels float32 (N,), game_ids)."""
+                  death_penalty: float = 10.0, return_index: bool = False):
+    """Return (boards uint8 (N,20,10), ctx float32 (N,C), labels float32 (N,), game_ids).
+
+    With return_index, also return each sample's record index t (the decision it follows).
+    """
     n = len(recs)
     game = recs['game_id'].astype(np.int64)
 
@@ -100,4 +103,6 @@ def build_samples(recs: np.ndarray, horizon: int = 12, gamma: float = 0.97,
     dies_in_window = died[t] & (lt - t <= horizon)
     lab[dies_in_window] -= death_penalty * gamma ** (lt[dies_in_window] - t[dies_in_window] - 1)
 
+    if return_index:
+        return boards, ctx, lab, game[t], t
     return boards, ctx, lab, game[t]

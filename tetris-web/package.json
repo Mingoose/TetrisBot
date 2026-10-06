@@ -10,7 +10,10 @@
     "harness:build": "esbuild harness/selfplay.ts --bundle --platform=node --format=esm --outfile=harness/dist/selfplay.mjs --log-level=warning",
     "harness": "npm run harness:build && node harness/dist/selfplay.mjs",
     "harness:typecheck": "tsc -p harness/tsconfig.json",
-    "test:rules": "esbuild harness/rules.test.ts --bundle --platform=node --format=esm --outfile=harness/dist/rules.test.mjs --log-level=warning && node harness/dist/rules.test.mjs"
+    "test:rules": "esbuild harness/rules.test.ts --bundle --platform=node --format=esm --outfile=harness/dist/rules.test.mjs --log-level=warning && node harness/dist/rules.test.mjs",
+    "valuecheck": "esbuild harness/valuecheck.ts --bundle --platform=node --format=esm --outfile=harness/dist/valuecheck.mjs --log-level=warning && node harness/dist/valuecheck.mjs",
+    "duel": "esbuild harness/duel.ts --bundle --platform=node --format=esm --outfile=harness/dist/duel.mjs --log-level=warning && node harness/dist/duel.mjs",
+    "candidates": "esbuild harness/candidates.ts --bundle --platform=node --format=esm --outfile=harness/dist/candidates.mjs --log-level=warning && node harness/dist/candidates.mjs"
   },
   "devDependencies": {
     "@types/node": "^20.19.43",

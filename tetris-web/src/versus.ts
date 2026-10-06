@@ -243,6 +243,13 @@ export function setupPlayerLockHook(data: VersusData): void {
   });
 }
 
+// The next n pieces a bot-vs-bot bot will draw (after its visible queue),
+// extending the shared sequence as needed.
+export function bvbLookahead(bot: BotBoard, n: number): PieceType[] {
+  getBvbPiece(bot.pieceIndex + n - 1);
+  return bvbSeq.slice(bot.pieceIndex, bot.pieceIndex + n);
+}
+
 // Send bot state to the AI worker for async move computation.
 // combat is spread into the message so the worker has current combo/b2b without
 // those fields living on BotBoard.
@@ -256,10 +263,9 @@ export function requestBotMove(
   // b2bActive is kept for uploaded AIs written against the older message format.
   const b2bActive = b2b >= 0;
   if (bot.pieceIndex >= 0) {
-    // Extend shared sequence and pass a slice as bagState so the beam search
-    // looks ahead into the same pieces both bots will actually receive.
-    getBvbPiece(bot.pieceIndex + WORKER_LOOKAHEAD - 1);
-    const bagState = bvbSeq.slice(bot.pieceIndex, bot.pieceIndex + WORKER_LOOKAHEAD);
+    // Pass a slice as bagState so the beam search looks ahead into the same
+    // pieces both bots will actually receive.
+    const bagState = bvbLookahead(bot, WORKER_LOOKAHEAD);
     worker.postMessage({ bot: { ...bot, bagState }, pendingGarbage, combo, b2b, b2bActive, ...aiParams });
   } else {
     worker.postMessage({ bot, pendingGarbage, combo, b2b, b2bActive, ...aiParams });

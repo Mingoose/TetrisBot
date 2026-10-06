@@ -22,7 +22,7 @@ VITE_SUPABASE_ANON_KEY=...
 
 ### Architecture
 
-Twenty-four TypeScript source files in `src/`, each with a single responsibility:
+Twenty-six TypeScript source files in `src/`, each with a single responsibility:
 
 **Core game engine:**
 - **`types.ts`** — All shared interfaces: `GameState`, `Snapshot`, `ActivePiece`, `CellValue`, `GameMode`, `GameVariant`
@@ -38,6 +38,8 @@ Twenty-four TypeScript source files in `src/`, each with a single responsibility
 - **`engine.ts`** — Public types: `EngineRequest`, `EngineAnalysis`, `EngineLine`, `EngineMove`; `gameStateToEngineRequest()` helper
 - **`ai.ts`** — Beam search implementation; `findBestMove`/`findBestMoveHard`/`analyzePositionHard`; `AiDifficulty` levels (easy=greedy, medium=beam W20 D4, hard=beam W32 D5 + advanced eval, experimental=CNN eval beam W20 D3); internally uses a `Uint16Array` bitmask board for fast line-clear detection and board copies during search
 - **`cnnEvaluator.ts`** — TensorFlow.js CNN position evaluator for `experimental` difficulty; loads weights from `public/models/tetris_eval_weights.bin`; exports `loadCnnModel()`, `isCnnReady()`, `evaluateBoardsBatch()`; architecture: 3× Conv2D(BN-folded) + GlobalAvgPool + 2× Dense, input `[N,20,10,1]` binary occupancy
+- **`valueNet.ts`** — Queue-aware value net (`training/value_net.py`) in plain TypeScript: `ValueNet` loads the JSON from `training/export_value_ts.py`; `encodeContext()` must match `training/value_data.py`
+- **`valueBot.ts`** — 1-ply bot: `scoreCandidates()`/`findBestMoveValue()` score each placement (and the hold option) as exact attack + net value of the afterstate
 - **`ai.worker.ts`** — Web Worker entry point; dispatches `type:'analyze'` to `analyzePositionHard`, otherwise to bot-move functions
 - **`moveQuality.ts`** — `classifyMove()`: matches player placement against engine lines to rate quality (great/good/mistake/blunder) by score delta
 
@@ -77,6 +79,8 @@ Twenty-four TypeScript source files in `src/`, each with a single responsibility
 **Bot-vs-bot piece sync:** Both bots share a single `bvbSeq[]` array grown lazily by one Bag. Each bot tracks its own `pieceIndex` so they draw deterministically from the same sequence regardless of play speed.
 
 **Self-play harness (`harness/`):** `npm run harness -- --out ../training/data/runs/<name> --games N` plays headless games with the real `ai.ts` beam search across worker threads and writes fixed-width binary records (layout in `harness/record.ts`, mirrored into each run's `meta.json`). Load them in Python with `training/selfplay_data.py`. Games are reproducible from `(--seed, game id)` because each game swaps in a seeded `Math.random`. On an M1, the hard teacher (W32 D5) produces about 90K positions/hour; throughput levels off at about 4 workers. Typecheck with `npm run harness:typecheck` (the app's `tsc` only covers `src/`). `--weights file.json` overrides hard-mode weights via `setWeights()` in `ai.ts`; `training/compare_runs.py` compares runs with the same seed game by game.
+
+**1v1 harness:** `npm run duel -- --a net:../training/models/value_v2_c16.json --b hard --games 100` plays seeded bot-vs-bot games (shared piece sequence, `versus.ts` garbage, equal virtual PPS, sides swapped each game). Bot specs: `hard`, `hard:W:D`, `net:FILE.json`. `npm run valuecheck -- FILE.json` checks the TS net and bot against PyTorch on the validation positions in the export and reports agreement with the teacher's moves. `npm run candidates -- RUN_DIR` lists every placement of every recorded decision for `training/train_rank.py` (ranking loss; see `training/HANDOFF.md`).
 
 **Lock delay:** 500ms, resets on movement, max 15 resets before force-lock.
 

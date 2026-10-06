@@ -99,6 +99,45 @@ How to read them:
   model: +0.93 (T in hold) … +0.60 (no T until next bag) — right direction, too
   timid.
 
+## 1v1 results (2026-10-05, M1 Max)
+
+v2 trained (val R² 0.313 full / 0.297 half / 0.311 c16). Exported with
+`export_value_ts.py`, ported to TS (`src/valueNet.ts`, `src/valueBot.ts`);
+`npm run valuecheck` matches PyTorch to 2e-6 with identical boards/contexts on
+1,000 validation positions. Duels (`npm run duel`, 2 pps both sides):
+
+| A vs B | Result | Attack/piece A vs B |
+|---|---|---|
+| net c16 1-ply vs hard | 0–100 | 0.22 vs 0.39 |
+| net 32ch 1-ply vs hard | 3–47 | 0.23 vs 0.38 |
+| hard heuristic 1-ply (hard:1:1) vs hard | 1–49 | 0.17 vs 0.39 |
+| net c16 1-ply vs hard:1:1 | 15–35 | 0.23 vs 0.15 |
+
+The net bot attacks more than the 1-ply heuristic but tops out sooner. Watching
+it play solo: it builds boards full of holes and rates them highly (~8). It
+only ever trained on afterstates the teacher chose, so 1-ply argmax over ~70
+candidates finds its blind spots. It picks the teacher's move 17.5% of the time
+(the 1-ply heuristic: 29.3%). Fix candidates: train on the other candidates too
+(a ranking loss over each position's placements, target = teacher's move), and/or
+label states the net bot itself visits.
+
+### Ranking loss (step 1 of the fix)
+
+`npm run candidates -- RUN_DIR` (tetris-web/) writes every placement of every
+recorded decision (~69 each, 55M total for v2+v2b, ~3 GB, `cand*.bin` in the
+run dir). `train_rank.py` adds a softmax loss over attack + value with the
+teacher's move as target (`--rank-weight 1`, `--temp 1`), starting from
+`value_v2_c16.pt`: 12 epochs × 200K decisions, ~2¼ min each on MPS.
+Log: `data/logs/train-rank-c16.log`; model `models/rank_v2_c16.pt`.
+
+- Teacher agreement 17.0% → 35.7% (top 3: 36% → 66%). Value R² fell to ~−0.05:
+  the output now only ranks, it no longer predicts attack on its own.
+- vs hard:1:1 (1-ply heuristic): **98–2** (old net 15–35).
+- vs hard: **12–88** (old net 0–100); games 154 pieces (was 32), attack/piece 0.39 vs 0.50.
+
+Next: selective deepening (top-K re-search over the known queue), and a lower
+`--rank-weight` to keep a calibrated value.
+
 ## Project background
 
 **Goal.** A Tetris bot whose network judges a board *together with the upcoming
