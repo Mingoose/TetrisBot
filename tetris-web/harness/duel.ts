@@ -9,7 +9,8 @@
 //   npm run duel -- --a net:../training/models/value_v2_c16.json --b hard --games 200
 //
 // Bot specs: hard (W32 D5) | hard:W:D | net:FILE.json (1-ply value net)
-//            | net:FILE.json@K (value net, top K re-searched with the next piece)
+//            | net:FILE.json@K[,K2...] (value net; top K re-searched with the next
+//              piece, top K2 of each of those with the piece after; see findBestMoveDeep)
 // Options: --games N --workers N --pieces N (cap per bot; draw if both reach it)
 //          --pps N --seed N --out FILE.jsonl (one line per game)
 
@@ -66,7 +67,7 @@ function makeBot(spec: string): Think {
   }
   if (kind === 'net') {
     const [path, k] = rest.join(':').split('@');
-    const topK = k ? Number(k) : 1;
+    const widths = k ? k.split(',').map(Number) : [];
     const net = new ValueNet(JSON.parse(readFileSync(path, 'utf8')) as ValueNetFile);
     return (bot, combat, now) => {
       // The bag as a set: the pieces left before the next 7-piece boundary of the shared sequence.
@@ -85,7 +86,7 @@ function makeBot(spec: string): Think {
       return findBestMoveDeep({
         board: bot.board, active: bot.active.type, hold: bot.hold, queue: bot.nextQueue,
         bagMask, combo: combat.combo, b2b: combat.b2b, landingCols, pendingCols,
-      }, net, topK);
+      }, net, widths);
     };
   }
   throw new Error(`Unknown bot spec: ${spec}`);

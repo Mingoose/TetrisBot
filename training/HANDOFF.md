@@ -152,6 +152,25 @@ K=3 results are within noise of each other (paired games: 22 won only by
 rank 1.0, 25 only by 0.25); the 0.25 net attacks more and ends games faster.
 ms/move is Node with 8–9 duel workers sharing the CPU.
 
+### Faster net and deeper search (2026-10-06)
+
+`valueNet.ts` now skips rows above the stack (their activations equal an
+empty board's, cached per layer, with precomputed first-dense-layer sums) and
+register-blocks the convolutions: 2.6 ms → 0.45 ms per board (c16), still
+within 2.5e-6 of PyTorch. Duel spec widths are per ply: `@3,2` = top 3 moves,
+then the top 2 replies of each scored with a third piece. rank_v2_c16 vs hard,
+200 games, same seeds (data/duels/depth-*-vs-hard.jsonl):
+
+| Search | vs hard | Attack/piece (net vs hard) | Length | ms/move |
+|---|---|---|---|---|
+| `@3` | 98–102 (49%) | 0.542 vs 0.546 | 214 | 172 |
+| `@5` | 115–85 (57.5%) | 0.571 vs 0.548 | 187 | 252 |
+| `@3,2` | **161–39 (80.5%)** | 0.622 vs 0.549 | 170 | 419 |
+
+Paired games: `@3,2` beats `@3` (84 vs 21 games won only by one, p < 0.0001)
+and `@5` (68 vs 22, p < 0.0001); `@5` vs `@3` is 57 vs 40 (p ≈ 0.10).
+The third ply matters more than a wider second ply.
+
 ## Project background
 
 **Goal.** A Tetris bot whose network judges a board *together with the upcoming

@@ -125,27 +125,47 @@ export function findBestMoveValue(state: ValueSearchState, net: ValueNet): BotMo
 }
 
 /**
- * Take the `topK` best placements by 1-ply score and re-score each as its attack
- * plus the best follow-up with the next piece (attack + net value). The next
- * piece is always visible, so this second ply needs no guessing.
+ * Re-search the best placements deeper with the visible queue. widths[d] is how
+ * many of the best moves at ply d+1 (by attack + value) are expanded with the
+ * next piece: [3] re-scores the top 3 as attack + best follow-up; [3, 2] also
+ * expands the top 2 follow-ups of each with a third piece. [] is 1-ply. A line
+ * scores the attack along it plus the value of the board it ends on. The pieces
+ * involved are all visible (5 in the queue), so the search never guesses.
  */
-export function findBestMoveDeep(state: ValueSearchState, net: ValueNet, topK: number): BotMove {
-  const roots = scoreCandidates(state, net);
-  const live = roots.filter(c => !c.dies).slice(0, topK);
-  if (topK <= 1 || live.length <= 1) return roots[0]?.move ?? NO_MOVE;
+export function findBestMoveDeep(state: ValueSearchState, net: ValueNet, widths: number[]): BotMove {
+  const board = cellBoardToBm(state.board);
+  const roots = scoreOn(candidatesOn(board, state), state.bagMask, net);
+  const live = roots.filter(c => !c.dies).slice(0, widths[0] ?? 0);
+  if (live.length <= 1) return roots[0]?.move ?? NO_MOVE;
   let best = live[0];
   let bestScore = -Infinity;
   for (const c of live) {
-    const s = c.attack + bestFollowUp(state, c, net);
+    const s = c.attack + lineValue(state, c, net, widths, 1);
     if (s > bestScore) { bestScore = s; best = c; }
   }
   return best.move;
 }
 
-// Best attack + value over the placements after `c`, from the position it leaves.
-function bestFollowUp(state: ValueSearchState, c: Candidate, net: ValueNet): number {
-  // Garbage after this move: a clear cancels queued rows oldest first; otherwise
-  // the ready rows land. Whatever is left is assumed to have arrived by the next move.
+// Best score reachable from the position `c` leaves: attack + value one ply on,
+// or deeper while widths[depth] says to keep expanding.
+function lineValue(state: SearchFields, c: Candidate, net: ValueNet, widths: number[], depth: number): number {
+  const child = positionAfter(state, c);
+  const scored = scoreOn(candidatesOn(child.board, child.state), child.state.bagMask, net);
+  if (!scored.length) return DEATH_SCORE;
+  const live = depth < widths.length ? scored.filter(x => !x.dies).slice(0, widths[depth]) : [];
+  if (!live.length) return scored[0].score;
+  let best = -Infinity;
+  for (const x of live) best = Math.max(best, x.attack + lineValue(child.state, x, net, widths, depth + 1));
+  return best;
+}
+
+type SearchFields = Omit<ValueSearchState, 'board'>;
+
+// The decision after playing `c`: its board with any landed garbage, the next
+// piece, and what is left of the garbage queue.
+function positionAfter(state: SearchFields, c: Candidate): { board: Uint16Array; state: SearchFields } {
+  // A clear cancels queued rows oldest first; otherwise the ready rows land.
+  // Whatever is left is assumed to have arrived by the next move.
   const pending = state.pendingCols ?? state.landingCols;
   let board = c.after;
   let rest: number[];
@@ -155,16 +175,17 @@ function bestFollowUp(state: ValueSearchState, c: Candidate, net: ValueNet): num
     rest = pending.slice(c.landing);
   }
   const piece = (i: number) => ALL_PIECE_TYPES[i];
-  const children = candidatesOn(board, {
-    active: piece(c.next),
-    hold: c.hold === NO_PIECE ? null : piece(c.hold),
-    queue: c.queue4.filter(i => i !== NO_PIECE).map(piece),
-    bagMask: state.bagMask, // the draw after this move is unseen, as in training
-    combo: c.combo, b2b: c.b2b,
-    landingCols: rest.slice(0, RULES.garbageCap), pendingCols: rest,
-  });
-  const scored = scoreOn(children, state.bagMask, net);
-  return scored.length ? scored[0].score : DEATH_SCORE;
+  return {
+    board,
+    state: {
+      active: piece(c.next),
+      hold: c.hold === NO_PIECE ? null : piece(c.hold),
+      queue: c.queue4.filter(i => i !== NO_PIECE).map(piece),
+      bagMask: state.bagMask, // the draw after this move is unseen, as in training
+      combo: c.combo, b2b: c.b2b,
+      landingCols: rest.slice(0, RULES.garbageCap), pendingCols: rest,
+    },
+  };
 }
 
 // `after` with garbage rows pushed in from the bottom (versus.ts tankGarbage

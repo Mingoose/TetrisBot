@@ -73,7 +73,7 @@ for (const ch of checks) {
   if (DEEP_K.length && deepN < DEEP_CHECKS) {
     deepN++;
     DEEP_K.forEach((k, i) => {
-      const m = findBestMoveDeep(state, net, k);
+      const m = findBestMoveDeep(state, net, [k]);
       if (m.rotationIndex === rot && m.x === x && m.y === y && m.useHold === (hold === 1)) deepTop1[i]++;
     });
   }
