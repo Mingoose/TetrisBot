@@ -5,7 +5,10 @@
 // positions with the teacher's move and Python's sample for it.
 //
 // Usage (from tetris-web/):
-//   npm run valuecheck -- ../training/models/value_v2_c16.json
+//   npm run valuecheck -- ../training/models/value_v2_c16.json [--deep]
+//
+// --deep also measures agreement with the top K re-searched one piece deeper
+// (findBestMoveDeep), on the first DEEP_CHECKS positions; it is ~5× slower per position.
 
 import { readFileSync } from 'node:fs';
 
@@ -13,7 +16,7 @@ import type { PieceType } from '../src/types';
 import { ALL_PIECE_TYPES } from '../src/pieces';
 import { BOARD_COLS, BOARD_ROWS } from '../src/board';
 import { ValueNet, ValueNetFile } from '../src/valueNet';
-import { scoreCandidates } from '../src/valueBot';
+import { findBestMoveDeep, scoreCandidates } from '../src/valueBot';
 import { findBestMoveHard } from '../src/ai';
 
 interface Check {
@@ -37,6 +40,10 @@ const checks = file.checks;
 let maxNetErr = 0, ctxMismatch = 0, boardMismatch = 0, attackMismatch = 0, notFound = 0;
 let top1 = 0, top3 = 0, rankSum = 0, hard1Top1 = 0;
 let netMs = 0, evals = 0;
+const DEEP_K = process.argv.includes('--deep') ? [3, 5] : [];
+const DEEP_CHECKS = 200;
+let deepN = 0;
+const deepTop1 = DEEP_K.map(() => 0);
 
 for (const ch of checks) {
   // 1. Net alone, on Python's own inputs.
@@ -63,6 +70,13 @@ for (const ch of checks) {
   if (t.after.some((b, r) => b !== ch.after[r])) boardMismatch++;
   if (t.ctx.some((c, i) => Math.abs(c - ch.ctx[i]) > 1e-6)) ctxMismatch++;
   if (t.attack !== ch.attack) attackMismatch++;
+  if (DEEP_K.length && deepN < DEEP_CHECKS) {
+    deepN++;
+    DEEP_K.forEach((k, i) => {
+      const m = findBestMoveDeep(state, net, k);
+      if (m.rotationIndex === rot && m.x === x && m.y === y && m.useHold === (hold === 1)) deepTop1[i]++;
+    });
+  }
   if (rank === 0) top1++;
   if (rank < 3) top3++;
   rankSum += rank + 1;
@@ -86,5 +100,7 @@ console.log(`teacher move not among candidates: ${notFound}`);
 console.log(`teacher move encoded differently from Python: board ${boardMismatch}, context ${ctxMismatch}, attack ${attackMismatch}`);
 console.log(`picks the teacher's move: net 1-ply ${pct(top1)} (top 3: ${pct(top3)}, mean rank ${(rankSum / found).toFixed(1)}), ` +
   `hard heuristic 1-ply ${pct(hard1Top1)}`);
+if (DEEP_K.length) console.log(`with the top K re-searched one piece deeper (first ${deepN} positions): ` +
+  DEEP_K.map((k, i) => `K=${k} ${pct(deepTop1[i], deepN)}`).join(', '));
 console.log(`speed: ${(netMs / n).toFixed(1)} ms/move, ${(1000 * netMs / evals).toFixed(0)} µs/board, ${(evals / n).toFixed(0)} candidates/move`);
 if (maxNetErr > 1e-3 || boardMismatch || ctxMismatch || attackMismatch) process.exitCode = 1;

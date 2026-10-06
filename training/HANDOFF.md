@@ -135,8 +135,22 @@ Log: `data/logs/train-rank-c16.log`; model `models/rank_v2_c16.pt`.
 - vs hard:1:1 (1-ply heuristic): **98–2** (old net 15–35).
 - vs hard: **12–88** (old net 0–100); games 154 pieces (was 32), attack/piece 0.39 vs 0.50.
 
-Next: selective deepening (top-K re-search over the known queue), and a lower
-`--rank-weight` to keep a calibrated value.
+### Selective deepening (top K re-searched one piece deeper)
+
+`findBestMoveDeep` in `valueBot.ts`; duel spec `net:FILE.json@K`. The top K
+1-ply moves are re-scored as attack + best (attack + value) with the next,
+visible piece. Same seeds as the 1-ply duels:
+
+| Net, search | vs hard | Attack/piece (net vs hard) | Game length | ms/move |
+|---|---|---|---|---|
+| rank_v2_c16, 1-ply | 12–88 | 0.39 vs 0.50 | 154 | ~210 |
+| rank_v2_c16, K=3 | **51–49** | 0.54 vs 0.54 | 224 | ~850 |
+| rank025_v2_c16, K=3 | **54–46** | 0.59 vs 0.53 | 115 | ~870 |
+
+`rank025` = `--rank-weight 0.25` (val R² 0.18, teacher agreement 34.1%). The two
+K=3 results are within noise of each other (paired games: 22 won only by
+rank 1.0, 25 only by 0.25); the 0.25 net attacks more and ends games faster.
+ms/move is Node with 8–9 duel workers sharing the CPU.
 
 ## Project background
 

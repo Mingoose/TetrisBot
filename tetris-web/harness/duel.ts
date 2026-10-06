@@ -9,6 +9,7 @@
 //   npm run duel -- --a net:../training/models/value_v2_c16.json --b hard --games 200
 //
 // Bot specs: hard (W32 D5) | hard:W:D | net:FILE.json (1-ply value net)
+//            | net:FILE.json@K (value net, top K re-searched with the next piece)
 // Options: --games N --workers N --pieces N (cap per bot; draw if both reach it)
 //          --pps N --seed N --out FILE.jsonl (one line per game)
 
@@ -22,7 +23,7 @@ import { RULES } from '../src/rules';
 import { initBotVsBotData, applyBotMove, bvbLookahead, BotBoard, CombatState } from '../src/versus';
 import { findBestMoveHard } from '../src/ai';
 import { ValueNet, ValueNetFile } from '../src/valueNet';
-import { findBestMoveValue, BotMove } from '../src/valueBot';
+import { findBestMoveDeep, BotMove } from '../src/valueBot';
 
 interface Config {
   a: string; b: string; games: number; workers: number; pieces: number;
@@ -64,22 +65,27 @@ function makeBot(spec: string): Think {
       { ...bot, bagState: bvbLookahead(bot, 30) }, combat.pendingGarbage, w, d, combat.combo, combat.b2b);
   }
   if (kind === 'net') {
-    const net = new ValueNet(JSON.parse(readFileSync(rest.join(':'), 'utf8')) as ValueNetFile);
+    const [path, k] = rest.join(':').split('@');
+    const topK = k ? Number(k) : 1;
+    const net = new ValueNet(JSON.parse(readFileSync(path, 'utf8')) as ValueNetFile);
     return (bot, combat, now) => {
       // The bag as a set: the pieces left before the next 7-piece boundary of the shared sequence.
       const left = (7 - bot.pieceIndex % 7) % 7;
       let bagMask = left ? 0 : 0x7f;
       for (const p of bvbLookahead(bot, left)) bagMask |= 1 << ALL_PIECE_TYPES.indexOf(p);
-      // Rows that would land on a non-clearing lock now (versus.ts tankGarbage).
-      const landingCols: number[] = [];
+      // Queued garbage rows, and those that would land on a non-clearing lock now
+      // (finished travelling, at most the cap; versus.ts tankGarbage).
+      const pendingCols: number[] = [];
+      let ready = 0;
       for (const chunk of combat.incoming) {
-        if (chunk.readyAt > now) break;
-        for (let i = 0; i < chunk.amount && landingCols.length < RULES.garbageCap; i++) landingCols.push(chunk.column);
+        for (let i = 0; i < chunk.amount; i++) pendingCols.push(chunk.column);
+        if (chunk.readyAt <= now && ready === pendingCols.length - chunk.amount) ready = pendingCols.length;
       }
-      return findBestMoveValue({
+      const landingCols = pendingCols.slice(0, Math.min(ready, RULES.garbageCap));
+      return findBestMoveDeep({
         board: bot.board, active: bot.active.type, hold: bot.hold, queue: bot.nextQueue,
-        bagMask, combo: combat.combo, b2b: combat.b2b, landingCols,
-      }, net);
+        bagMask, combo: combat.combo, b2b: combat.b2b, landingCols, pendingCols,
+      }, net, topK);
     };
   }
   throw new Error(`Unknown bot spec: ${spec}`);
