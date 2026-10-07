@@ -7,6 +7,8 @@ import {
 import { setLockHook, spawnPiece, NEXT_QUEUE_SIZE } from './game';
 import { SpinKind, RULES, resolveClear } from './rules';
 import { placementSpin } from './ai';
+import { ALL_PIECE_TYPES } from './pieces';
+import { searchStateFor } from './valueBot';
 
 // One received attack waiting to land, TETR.IO style: it can't land until it
 // has travelled (readyAt), and all its rows share a hole column unless
@@ -250,15 +252,32 @@ export function bvbLookahead(bot: BotBoard, n: number): PieceType[] {
   return bvbSeq.slice(bot.pieceIndex, bot.pieceIndex + n);
 }
 
+// Pieces left in the bot's current bag as a bit set (bit i = ALL_PIECE_TYPES[i]);
+// 0x7f when the next draw starts a new bag. Bot-vs-bot bots draw from the shared
+// sequence in 7-piece bags, so their bag is what is left before the next boundary.
+export function botBagMask(bot: BotBoard): number {
+  const left = bot.pieceIndex >= 0 ? bvbLookahead(bot, (7 - bot.pieceIndex % 7) % 7) : bot.bagState;
+  if (left.length === 0) return 0x7f;
+  let mask = 0;
+  for (const p of left) mask |= 1 << ALL_PIECE_TYPES.indexOf(p);
+  return mask;
+}
+
 // Send bot state to the AI worker for async move computation.
+// The value-net bot (aiParams.valueNet = search widths) gets the full search
+// position instead, built here because garbage readiness uses this thread's clock.
 // combat is spread into the message so the worker has current combo/b2b without
 // those fields living on BotBoard.
 export function requestBotMove(
   worker: Worker,
   bot: BotBoard,
   combat: CombatState,
-  aiParams?: { beamWidth: number; searchDepth: number; advancedEval?: boolean; cnnEval?: boolean },
+  aiParams?: { beamWidth: number; searchDepth: number; advancedEval?: boolean; valueNet?: number[] },
 ): void {
+  if (aiParams?.valueNet) {
+    worker.postMessage({ valueNet: aiParams.valueNet, state: searchStateFor(bot, combat, botBagMask(bot), performance.now()) });
+    return;
+  }
   const { pendingGarbage, combo, b2b } = combat;
   // b2bActive is kept for uploaded AIs written against the older message format.
   const b2bActive = b2b >= 0;

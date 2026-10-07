@@ -22,9 +22,6 @@
     "vite": "^5.0.0"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.100.1",
-    "@tensorflow/tfjs-backend-cpu": "^4.22.0",
-    "@tensorflow/tfjs-core": "^4.22.0",
-    "@tensorflow/tfjs-layers": "^4.22.0"
+    "@supabase/supabase-js": "^2.100.1"
   }
 }

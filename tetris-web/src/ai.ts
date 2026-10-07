@@ -12,11 +12,12 @@ const BEAM_WIDTH = 20;
 const SEARCH_DEPTH = 4;
 
 export type AiDifficulty = 'easy' | 'medium' | 'hard' | 'experimental';
-export const AI_DIFFICULTY_PARAMS: Record<AiDifficulty, { beamWidth: number; searchDepth: number; advancedEval: boolean; cnnEval?: boolean; label: string; subtitle: string }> = {
+// valueNet: the value-net bot (valueBot.ts) with these search widths instead of the beam search.
+export const AI_DIFFICULTY_PARAMS: Record<AiDifficulty, { beamWidth: number; searchDepth: number; advancedEval: boolean; valueNet?: number[]; label: string; subtitle: string }> = {
   easy:         { beamWidth: 1,  searchDepth: 1, advancedEval: false,                  label: 'EASY',         subtitle: 'greedy one-piece' },
   medium:       { beamWidth: 20, searchDepth: 4, advancedEval: false,                  label: 'MEDIUM',       subtitle: 'beam search' },
   hard:         { beamWidth: 32, searchDepth: 5, advancedEval: true,                   label: 'HARD',         subtitle: 'beam search+' },
-  experimental: { beamWidth: 20, searchDepth: 3, advancedEval: false, cnnEval: true,   label: 'EXPERIMENTAL', subtitle: 'CNN eval' },
+  experimental: { beamWidth: 0,  searchDepth: 0, advancedEval: false, valueNet: [3, 2], label: 'EXPERIMENTAL', subtitle: 'value net' },
 };
 
 // Module-level bag used only for beam search simulation.
@@ -114,14 +115,6 @@ function cellBoardToBm(board: CellValue[][]): Uint16Array {
     }
   }
   return bm;
-}
-
-// Convert a bitmask board back to CellValue[][].  Used only by the CNN evaluator,
-// which expects the legacy board format.
-function bmToCellBoard(bm: Uint16Array): CellValue[][] {
-  return Array.from({ length: BOARD_ROWS }, (_, r) =>
-    Array.from({ length: BOARD_COLS }, (_, c) => ((bm[r] >> c) & 1) as CellValue),
-  );
 }
 
 function bmCollides(bm: Uint16Array, piece: ActivePiece, dx: number, dy: number): boolean {
@@ -1190,67 +1183,6 @@ function expandBeamNodeHardHard(node: BeamNodeHard, pendingGarbage: number): Bea
   }
 
   return successors;
-}
-
-// ---- Experimental CNN difficulty — beam search with batched CNN re-ranking ----
-//
-// Identical search structure to findBestMoveHard, but after each depth level the
-// heuristic scores in all candidate nodes are replaced by CNN-predicted board values
-// (via a single batched ONNX forward pass), and beam pruning is driven by those CNN
-// scores instead. This gives the CNN full control over which lines survive.
-//
-// evalFn is passed in rather than imported directly so this module loads cleanly
-// in environments where the CNN runtime isn't present (e.g., non-worker contexts).
-
-export async function findBestMoveCNN(
-  bot: BotBoard,
-  pendingGarbage: number = 0,
-  beamWidth: number = 20,
-  searchDepth: number = 3,
-  combo: number = -1,
-  b2b: number = -1,
-  evalFn: (boards: CellValue[][][]) => Promise<Float32Array>,
-): Promise<{ rotationIndex: number; x: number; y: number; useHold: boolean }> {
-  const rootBm = cellBoardToBm(bot.board);
-  const targetWellCol = pickTargetWellCol(rootBm);
-
-  let beam: BeamNodeHard[] = [{
-    board: rootBm,
-    activeType: bot.active.type,
-    nextQueue: [...bot.nextQueue],
-    hold: bot.hold,
-    holdUsed: bot.holdUsed,
-    bagState: bot.bagState,
-    score: 0,
-    garbageSent: 0,
-    combo,
-    b2b,
-    targetWellCol,
-    heights: computeColumnHeightsBm(rootBm),
-    firstMove: null,
-    movePath: null,
-  }];
-
-  for (let d = 0; d < searchDepth; d++) {
-    // Expand all beam nodes using the existing hard-mode expander.
-    // Nodes get heuristic scores from evaluateBoard — we replace them below.
-    const candidates: BeamNodeHard[] = [];
-    for (const node of beam) {
-      candidates.push(...expandBeamNodeHardHard(node, pendingGarbage));
-    }
-    if (candidates.length === 0) break;
-
-    // Batch CNN inference: replace heuristic scores with CNN-predicted board values.
-    // Convert bitmask boards back to CellValue[][] as the CNN evaluator expects the legacy format.
-    const cnnScores = await evalFn(candidates.map(n => bmToCellBoard(n.board)));
-    for (let i = 0; i < candidates.length; i++) {
-      candidates[i].score = cnnScores[i];
-    }
-
-    beam = topKDescending(candidates, beamWidth, n => n.score + n.garbageSent * W.garbageValue);
-  }
-
-  return beam[0]?.firstMove ?? { rotationIndex: 0, x: 0, y: 0, useHold: false };
 }
 
 // Find the best first move via beam search over SEARCH_DEPTH pieces.

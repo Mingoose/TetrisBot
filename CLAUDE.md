@@ -22,7 +22,7 @@ VITE_SUPABASE_ANON_KEY=...
 
 ### Architecture
 
-Twenty-six TypeScript source files in `src/`, each with a single responsibility:
+Twenty-five TypeScript source files in `src/`, each with a single responsibility:
 
 **Core game engine:**
 - **`types.ts`** — All shared interfaces: `GameState`, `Snapshot`, `ActivePiece`, `CellValue`, `GameMode`, `GameVariant`
@@ -36,11 +36,10 @@ Twenty-six TypeScript source files in `src/`, each with a single responsibility:
 
 **AI engine (Web Worker pipeline):**
 - **`engine.ts`** — Public types: `EngineRequest`, `EngineAnalysis`, `EngineLine`, `EngineMove`; `gameStateToEngineRequest()` helper
-- **`ai.ts`** — Beam search implementation; `findBestMove`/`findBestMoveHard`/`analyzePositionHard`; `AiDifficulty` levels (easy=greedy, medium=beam W20 D4, hard=beam W32 D5 + advanced eval, experimental=CNN eval beam W20 D3); internally uses a `Uint16Array` bitmask board for fast line-clear detection and board copies during search
-- **`cnnEvaluator.ts`** — TensorFlow.js CNN position evaluator for `experimental` difficulty; loads weights from `public/models/tetris_eval_weights.bin`; exports `loadCnnModel()`, `isCnnReady()`, `evaluateBoardsBatch()`; architecture: 3× Conv2D(BN-folded) + GlobalAvgPool + 2× Dense, input `[N,20,10,1]` binary occupancy
+- **`ai.ts`** — Beam search implementation; `findBestMove`/`findBestMoveHard`/`analyzePositionHard`; `AiDifficulty` levels (easy=greedy, medium=beam W20 D4, hard=beam W32 D5 + advanced eval, experimental=value-net bot `@3,2`, see `valueBot.ts`); internally uses a `Uint16Array` bitmask board for fast line-clear detection and board copies during search
 - **`valueNet.ts`** — Queue-aware value net (`training/value_net.py`) in plain TypeScript: `ValueNet` loads the JSON from `training/export_value_ts.py` and skips the empty rows above the stack (cached empty-board activations); `encodeContext()` must match `training/value_data.py`
 - **`valueBot.ts`** — 1-ply bot: `scoreCandidates()`/`findBestMoveValue()` score each placement (and the hold option) as exact attack + net value of the afterstate; `findBestMoveDeep(state, net, widths)` re-searches the best moves deeper over the visible queue (`[3, 2]` = top 3, then top 2 replies of each)
-- **`ai.worker.ts`** — Web Worker entry point; dispatches `type:'analyze'` to `analyzePositionHard`, otherwise to bot-move functions
+- **`ai.worker.ts`** — Web Worker entry point; dispatches `type:'analyze'` to `analyzePositionHard`, `valueNet` requests to `findBestMoveDeep`, otherwise to the beam searches; loads `public/models/value_net.{json,bin}` at start and posts `value_ready`/`value_unavailable`
 - **`moveQuality.ts`** — `classifyMove()`: matches player placement against engine lines to rate quality (great/good/mistake/blunder) by score delta
 
 **Game modes:**
@@ -68,7 +67,7 @@ Twenty-six TypeScript source files in `src/`, each with a single responsibility:
 
 **Game variants:** `'sprint'` races to 40 lines; `'creative'` is free play with board editor + engine analysis on pause; `'versus'` pits player against the bot with garbage exchange; `'watch'` is bot-only; `'botvsbot'` runs two bots head-to-head on a shared piece sequence.
 
-**CNN evaluator weights:** `public/models/tetris_eval_weights.bin` is a flat float32 blob of all CNN layer weights (conv1–3 kernels+biases, dense1–2 kernels+biases) exported from PyTorch with BatchNorm folded into Conv layers. The ONNX files in the same directory are not used at runtime. `loadCnnModel()` must be awaited before the `experimental` difficulty can run; `isCnnReady()` guards calls.
+**Value net weights:** `public/models/value_net.json` (config, label scaling, tensor offsets) + `value_net.bin` (float32 weights), written by `training/export_value_ts.py CKPT --app ../tetris-web/public/models`. Currently `rank_v2_c16`. The experimental difficulty sends `{ valueNet: widths, state }` (built in the main thread by `requestBotMove`, since garbage readiness uses that thread's clock) instead of the beam-search message.
 
 **Web Worker AI:** `ai.worker.ts` runs beam search off the main thread. `main.ts` posts requests via `requestBotMove()` (from `versus.ts`) and receives responses with the chosen move. Engine analysis for creative pause uses a separate `type:'analyze'` message path and returns `EngineAnalysis` with `topN` ranked lines.
 

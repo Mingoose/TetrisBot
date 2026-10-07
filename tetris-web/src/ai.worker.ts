@@ -1,20 +1,34 @@
-import { findBestMove, findBestMoveHard, findBestMoveCNN, analyzePositionHard } from './ai';
+import { findBestMove, findBestMoveHard, analyzePositionHard } from './ai';
 import type { BotBoard } from './versus';
 import type { EngineRequest } from './engine';
-import { loadCnnModel, evaluateBoardsBatch } from './cnnEvaluator';
+import { ValueNet, ValueNetManifest, valueNetFromBinary } from './valueNet';
+import { findBestMoveDeep, ValueSearchState } from './valueBot';
 
-// Begin loading the CNN model immediately. Once ready (or if unavailable), post a
-// status message so main.ts can enable/disable the experimental difficulty button.
-loadCnnModel()
-  .then(() => self.postMessage({ type: 'cnn_ready' }))
-  .catch(() => self.postMessage({ type: 'cnn_unavailable' }));
+// Load the value net (experimental difficulty) as soon as the worker starts, and
+// tell main.ts whether it is available so the menu can enable the difficulty.
+const netReady: Promise<ValueNet> = (async () => {
+  const base = `${import.meta.env.BASE_URL}models/`;
+  const get = async (name: string) => {
+    const res = await fetch(base + name);
+    if (!res.ok) throw new Error(`${name}: HTTP ${res.status}`);
+    return res;
+  };
+  const [manifest, blob] = await Promise.all([
+    get('value_net.json').then(r => r.json() as Promise<ValueNetManifest>),
+    get('value_net.bin').then(r => r.arrayBuffer()),
+  ]);
+  return new ValueNet(valueNetFromBinary(manifest, blob));
+})();
+netReady.then(
+  () => self.postMessage({ type: 'value_ready' }),
+  err => { console.error('[worker] value net unavailable:', err); self.postMessage({ type: 'value_unavailable' }); },
+);
 
 self.onmessage = (e: MessageEvent) => {
   const data = e.data as
     | { type: 'analyze'; request: EngineRequest }
-    | { type?: undefined; bot: BotBoard; pendingGarbage: number; combo?: number; b2b?: number; beamWidth?: number; searchDepth?: number; advancedEval?: boolean; cnnEval?: boolean };
-
-  console.log('[worker] onmessage type:', data.type, 'cnnEval:', (data as any).cnnEval);
+    | { type?: undefined; valueNet: number[]; state: ValueSearchState }
+    | { type?: undefined; valueNet?: undefined; bot: BotBoard; pendingGarbage: number; combo?: number; b2b?: number; beamWidth?: number; searchDepth?: number; advancedEval?: boolean };
 
   if (data.type === 'analyze') {
     const result = analyzePositionHard(data.request);
@@ -22,16 +36,20 @@ self.onmessage = (e: MessageEvent) => {
     return;
   }
 
-  const { bot, pendingGarbage, combo = -1, b2b = -1, beamWidth, searchDepth, advancedEval, cnnEval } = data;
-
-  if (cnnEval) {
-    console.log('[worker] starting cnnEval move');
-    findBestMoveCNN(bot, pendingGarbage, beamWidth, searchDepth, combo, b2b, evaluateBoardsBatch)
-      .then(move => { console.log('[worker] cnnEval move done:', move); self.postMessage(move); })
-      .catch(e => console.error('[worker] cnnEval move error:', e));
+  if (data.valueNet) {
+    const { valueNet: widths, state } = data;
+    netReady
+      .then(net => {
+        const t0 = performance.now();
+        const move = findBestMoveDeep(state, net, widths);
+        if (import.meta.env.DEV) console.debug(`[worker] value net move in ${(performance.now() - t0).toFixed(0)} ms`);
+        self.postMessage(move);
+      })
+      .catch(err => self.postMessage({ error: String(err) }));
     return;
   }
 
+  const { bot, pendingGarbage, combo = -1, b2b = -1, beamWidth, searchDepth, advancedEval } = data;
   const fn = advancedEval ? findBestMoveHard : findBestMove;
   self.postMessage(fn(bot, pendingGarbage, beamWidth, searchDepth, combo, b2b));
 };

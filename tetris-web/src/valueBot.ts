@@ -6,6 +6,7 @@
 // next (visible) piece: the net replaces most of the depth, not all of it.
 
 import type { CellValue, PieceType } from './types';
+import type { BotBoard, CombatState } from './versus';
 import { BOARD_COLS, BOARD_ROWS } from './board';
 import { spawnPiece } from './game';
 import { resolveClear, RULES } from './rules';
@@ -56,6 +57,26 @@ const DEATH_SCORE = -1000;
 const FULL_ROW = (1 << BOARD_COLS) - 1;
 
 const NO_MOVE: BotMove = { rotationIndex: 0, x: 0, y: 0, useHold: false };
+
+/**
+ * The search state for a versus.ts bot at time `now`. bagMask: the pieces left
+ * in the current bag (0x7f when the next draw starts a new bag).
+ */
+export function searchStateFor(bot: BotBoard, combat: CombatState, bagMask: number, now: number): ValueSearchState {
+  // Queued garbage rows, and those that would land on a non-clearing lock now
+  // (finished travelling, at most the cap; versus.ts tankGarbage).
+  const pendingCols: number[] = [];
+  let ready = 0;
+  for (const chunk of combat.incoming) {
+    for (let i = 0; i < chunk.amount; i++) pendingCols.push(chunk.column);
+    if (chunk.readyAt <= now && ready === pendingCols.length - chunk.amount) ready = pendingCols.length;
+  }
+  return {
+    board: bot.board, active: bot.active.type, hold: bot.hold, queue: bot.nextQueue,
+    bagMask, combo: combat.combo, b2b: combat.b2b,
+    landingCols: pendingCols.slice(0, Math.min(ready, RULES.garbageCap)), pendingCols,
+  };
+}
 
 /** Every placement of the active piece and of the hold option, unscored. */
 export function listCandidates(state: ValueSearchState): Candidate[] {
@@ -133,17 +154,24 @@ export function findBestMoveValue(state: ValueSearchState, net: ValueNet): BotMo
  * involved are all visible (5 in the queue), so the search never guesses.
  */
 export function findBestMoveDeep(state: ValueSearchState, net: ValueNet, widths: number[]): BotMove {
+  return searchDeep(state, net, widths).move;
+}
+
+/** The root moves the search expanded, with their deep scores (attack along the line + leaf value). */
+export interface SearchResult {
+  move: BotMove;
+  expanded: { move: BotMove; score: number }[];
+}
+
+export function searchDeep(state: ValueSearchState, net: ValueNet, widths: number[]): SearchResult {
   const board = cellBoardToBm(state.board);
   const roots = scoreOn(candidatesOn(board, state), state.bagMask, net);
   const live = roots.filter(c => !c.dies).slice(0, widths[0] ?? 0);
-  if (live.length <= 1) return roots[0]?.move ?? NO_MOVE;
-  let best = live[0];
-  let bestScore = -Infinity;
-  for (const c of live) {
-    const s = c.attack + lineValue(state, c, net, widths, 1);
-    if (s > bestScore) { bestScore = s; best = c; }
-  }
-  return best.move;
+  if (live.length <= 1) return { move: roots[0]?.move ?? NO_MOVE, expanded: [] };
+  const expanded = live.map(c => ({ move: c.move, score: c.attack + lineValue(state, c, net, widths, 1) }));
+  let best = expanded[0];
+  for (const e of expanded) if (e.score > best.score) best = e;
+  return { move: best.move, expanded };
 }
 
 // Best score reachable from the position `c` leaves: attack + value one ply on,

@@ -1,0 +1,140 @@
+{
+ "config": {
+  "channels": 16,
+  "squeeze": 8,
+  "hidden": 128,
+  "context_size": 57
+ },
+ "label_mean": 4.234139442443848,
+ "label_std": 3.0183908939361572,
+ "tensors": [
+  {
+   "name": "board.0.weight",
+   "shape": [
+    16,
+    1,
+    3,
+    3
+   ],
+   "offset": 0
+  },
+  {
+   "name": "board.0.bias",
+   "shape": [
+    16
+   ],
+   "offset": 144
+  },
+  {
+   "name": "board.2.weight",
+   "shape": [
+    16,
+    16,
+    3,
+    3
+   ],
+   "offset": 160
+  },
+  {
+   "name": "board.2.bias",
+   "shape": [
+    16
+   ],
+   "offset": 2464
+  },
+  {
+   "name": "board.4.weight",
+   "shape": [
+    16,
+    16,
+    3,
+    3
+   ],
+   "offset": 2480
+  },
+  {
+   "name": "board.4.bias",
+   "shape": [
+    16
+   ],
+   "offset": 4784
+  },
+  {
+   "name": "board.6.weight",
+   "shape": [
+    8,
+    16,
+    1,
+    1
+   ],
+   "offset": 4800
+  },
+  {
+   "name": "board.6.bias",
+   "shape": [
+    8
+   ],
+   "offset": 4928
+  },
+  {
+   "name": "context.0.weight",
+   "shape": [
+    64,
+    57
+   ],
+   "offset": 4936
+  },
+  {
+   "name": "context.0.bias",
+   "shape": [
+    64
+   ],
+   "offset": 8584
+  },
+  {
+   "name": "head.0.weight",
+   "shape": [
+    128,
+    1664
+   ],
+   "offset": 8648
+  },
+  {
+   "name": "head.0.bias",
+   "shape": [
+    128
+   ],
+   "offset": 221640
+  },
+  {
+   "name": "head.2.weight",
+   "shape": [
+    128,
+    128
+   ],
+   "offset": 221768
+  },
+  {
+   "name": "head.2.bias",
+   "shape": [
+    128
+   ],
+   "offset": 238152
+  },
+  {
+   "name": "head.4.weight",
+   "shape": [
+    1,
+    128
+   ],
+   "offset": 238280
+  },
+  {
+   "name": "head.4.bias",
+   "shape": [
+    1
+   ],
+   "offset": 238408
+  }
+ ]
+}

@@ -134,7 +134,7 @@ let versusAiSel: AiSelection = { ...defaultSel };
 let watchAiSel: AiSelection = { ...defaultSel };
 let bvbAiSel1: AiSelection = { ...defaultSel };
 let bvbAiSel2: AiSelection = { ...defaultSel };
-let cnnReady = false;
+let valueNetReady = false;
 
 // ---- Engine analysis state ----
 let engineMode = false;
@@ -535,8 +535,8 @@ function isValidMove(m: unknown): m is { rotationIndex: number; x: number; y: nu
 
 function wireWorker(w: Worker): void {
   w.onmessage = (e) => {
-    if (e.data?.type === 'cnn_ready') { cnnReady = true; return; }
-    if (e.data?.type === 'cnn_unavailable') { cnnReady = false; return; }
+    if (e.data?.type === 'value_ready') { valueNetReady = true; return; }
+    if (e.data?.type === 'value_unavailable') { valueNetReady = false; return; }
     if (e.data?.error) {
       console.warn('AI worker error:', e.data.error);
       if (customAiWorker) customAiError = `Runtime error: ${e.data.error}`;
@@ -704,7 +704,7 @@ function renderAiPickerList(current: AiSelection): void {
     { difficulty: 'easy',         label: 'Easy',         subtitle: 'greedy one-piece' },
     { difficulty: 'medium',       label: 'Medium',       subtitle: 'beam search' },
     { difficulty: 'hard',         label: 'Hard',         subtitle: 'beam search+' },
-    { difficulty: 'experimental', label: 'Experimental', subtitle: 'CNN eval' },
+    { difficulty: 'experimental', label: 'Experimental', subtitle: 'value net' },
   ];
 
   const builtinHeader = document.createElement('div');
@@ -714,7 +714,7 @@ function renderAiPickerList(current: AiSelection): void {
 
   for (const b of builtins) {
     const isSelected = current.kind === 'builtin' && current.difficulty === b.difficulty;
-    const disabled = b.difficulty === 'experimental' && !cnnReady;
+    const disabled = b.difficulty === 'experimental' && !valueNetReady;
     const item = document.createElement('div');
     item.className = 'ai-item' + (isSelected ? ' selected' : '') + (disabled ? '' : ' clickable');
     if (disabled) item.style.opacity = '0.4';
@@ -1628,7 +1628,7 @@ async function startGame(userId: string): Promise<void> {
       : state.variant === 'watch' ? selLabel(watchAiSel)
       : selLabel(bvbAiSel1);
     const bot2Name = selLabel(bvbAiSel2);
-    draw(ctx, state, versusData, botVsBotData, isAdmin, customAiError, customAiWarning, bot1Name, bot2Name, settings.keybindings, cnnReady, pressedBtn);
+    draw(ctx, state, versusData, botVsBotData, isAdmin, customAiError, customAiWarning, bot1Name, bot2Name, settings.keybindings, valueNetReady, pressedBtn);
     if (engineMode && state.mode === 'paused' && state.variant === 'creative') {
       if (engineAnalysis && engineBoardStates.length > 1) {
         const moveCount = engineBoardStates.length - 1;
@@ -1648,7 +1648,7 @@ async function startGame(userId: string): Promise<void> {
   state.rafHandle = requestAnimationFrame(gameLoop);
 }
 
-// Eagerly create the AI worker so CNN model loading begins immediately.
+// Eagerly create the AI worker so the value net starts loading immediately.
 // wireWorker is called inside getAiWorker() on first creation.
 getAiWorker();
 

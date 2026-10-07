@@ -20,6 +20,8 @@
 //   --pps N              pieces per second on the virtual clock that times garbage travel
 //   --seed N             base seed; each game's pieces and garbage are a function of (seed, game id)
 //   --weights FILE       JSON of hard-mode weight overrides (see setWeights in ai.ts)
+//   --net FILE.json@K,…  teacher = the value-net bot instead of the beam search
+//                        (export_value_ts.py JSON; widths as in valueBot.ts findBestMoveDeep)
 
 import { Worker, isMainThread, parentPort, workerData } from 'node:worker_threads';
 import { availableParallelism } from 'node:os';
@@ -30,8 +32,10 @@ import { fileURLToPath } from 'node:url';
 import type { CellValue, PieceType } from '../src/types';
 import { BOARD_COLS, BOARD_ROWS, collides, hardDropY } from '../src/board';
 import { getRotation } from '../src/pieces';
-import { initVersusData, applyBotMove, receiveGarbage, LockOutcome } from '../src/versus';
+import { initVersusData, applyBotMove, receiveGarbage, BotBoard, CombatState, LockOutcome } from '../src/versus';
 import { findBestMoveHard, setWeights } from '../src/ai';
+import { ValueNet, ValueNetFile } from '../src/valueNet';
+import { findBestMoveDeep, searchStateFor } from '../src/valueBot';
 import {
   PIECE_ORDER, NO_PIECE, RECORD_FIELDS, RECORD_SIZE, TERMINAL_DIED, TERMINAL_NONE,
   TERMINAL_TRUNCATED, PositionRecord, writeRecord,
@@ -50,6 +54,7 @@ interface Config {
   pps: number;
   seed: number;
   weights: string;
+  net: string;
 }
 
 const DEFAULTS: Config = {
@@ -65,6 +70,7 @@ const DEFAULTS: Config = {
   pps: 2,
   seed: 1,
   weights: '',
+  net: '',
 };
 
 interface GameSummary {
@@ -120,6 +126,17 @@ function bagMask(bagState: PieceType[]): number {
 // ---- Exploration ----
 
 type Move = { rotationIndex: number; x: number; y: number; useHold: boolean };
+type Teacher = (bot: BotBoard, combat: CombatState, now: number) => Move;
+
+function makeTeacher(cfg: Config): Teacher {
+  if (!cfg.net) {
+    return (bot, combat) => findBestMoveHard(bot, combat.pendingGarbage, cfg.beam, cfg.depth, combat.combo, combat.b2b);
+  }
+  const [path, k] = cfg.net.split('@');
+  const widths = k ? k.split(',').map(Number) : [];
+  const net = new ValueNet(JSON.parse(readFileSync(path, 'utf8')) as ValueNetFile);
+  return (bot, combat, now) => findBestMoveDeep(searchStateFor(bot, combat, bagMask(bot.bagState), now), net, widths);
+}
 
 // A uniformly random straight drop of the active piece, or null if none fits.
 function randomDrop(board: CellValue[][], type: PieceType, rng: () => number): Move | null {
@@ -137,7 +154,7 @@ function randomDrop(board: CellValue[][], type: PieceType, rng: () => number): M
 
 // ---- One game ----
 
-function playGame(cfg: Config, gameId: number): { records: Buffer; summary: GameSummary } {
+function playGame(cfg: Config, gameId: number, teacher: Teacher): { records: Buffer; summary: GameSummary } {
   const rng = mulberry32(gameSeed(cfg.seed, gameId));
   Math.random = rng;
 
@@ -175,9 +192,7 @@ function playGame(cfg: Config, gameId: number): { records: Buffer; summary: Game
       move = randomDrop(bot.board, bot.active.type, rng);
       isRandom = move !== null;
     }
-    if (!move) {
-      move = findBestMoveHard(bot, combat.pendingGarbage, cfg.beam, cfg.depth, combat.combo, combat.b2b);
-    }
+    if (!move) move = teacher(bot, combat, now);
 
     let out!: LockOutcome;
     applyBotMove(move, bot, combat, v.playerCombat, o => { out = o; }, now);
@@ -217,12 +232,13 @@ function playGame(cfg: Config, gameId: number): { records: Buffer; summary: Game
 function runWorker(): void {
   const { cfg, workerId, weights } = workerData as { cfg: Config; workerId: number; weights: Record<string, number> };
   setWeights(weights);
+  const teacher = makeTeacher(cfg);
   const file = join(cfg.out, `w${workerId}.bin`);
   parentPort!.on('message', (msg: { type: 'game'; gameId: number } | { type: 'stop' }) => {
     if (msg.type === 'stop') { process.exit(0); }
     // An engine error costs one game, not the worker. Nothing from the failed game is written.
     try {
-      const { records, summary } = playGame(cfg, msg.gameId);
+      const { records, summary } = playGame(cfg, msg.gameId, teacher);
       appendFileSync(file, records);
       parentPort!.postMessage(summary);
     } catch (err) {
@@ -240,11 +256,12 @@ function parseArgs(argv: string[]): Config {
     '--out': 'out', '--games': 'games', '--first-game': 'firstGame', '--workers': 'workers',
     '--pieces': 'pieces', '--beam': 'beam', '--depth': 'depth', '--eps': 'eps',
     '--garbage-rate': 'garbageRate', '--pps': 'pps', '--seed': 'seed', '--weights': 'weights',
+    '--net': 'net',
   };
   for (let i = 0; i < argv.length; i += 2) {
     const key = keys[argv[i]];
     if (!key || argv[i + 1] === undefined) throw new Error(`Unknown or incomplete option: ${argv[i]}`);
-    (cfg as Record<string, unknown>)[key] = key === 'out' || key === 'weights' ? argv[i + 1] : Number(argv[i + 1]);
+    (cfg as Record<string, unknown>)[key] = key === 'out' || key === 'weights' || key === 'net' ? argv[i + 1] : Number(argv[i + 1]);
   }
   if (!cfg.out) throw new Error('--out DIR is required');
   return cfg;
@@ -271,7 +288,7 @@ function runMain(): void {
   };
   writeFileSync(metaPath, JSON.stringify(meta, null, 2));
 
-  console.log(`Teacher W${cfg.beam} D${cfg.depth}, eps ${cfg.eps}, garbage ${cfg.garbageRate}/piece, ` +
+  console.log(`Teacher ${cfg.net ? `net ${cfg.net}` : `W${cfg.beam} D${cfg.depth}`}, eps ${cfg.eps}, garbage ${cfg.garbageRate}/piece, ` +
     `${cfg.games} games × ≤${cfg.pieces} pieces on ${cfg.workers} workers → ${cfg.out}`);
 
   let nextGame = cfg.firstGame;

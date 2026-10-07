@@ -171,6 +171,19 @@ Paired games: `@3,2` beats `@3` (84 vs 21 games won only by one, p < 0.0001)
 and `@5` (68 vs 22, p < 0.0001); `@5` vs `@3` is 57 vs 40 (p ≈ 0.10).
 The third ply matters more than a wider second ply.
 
+A fourth ply, `@3,2,2`: **168–32 (84%)**, attack/piece 0.686 vs 0.560, ~970
+ms/move (shared CPU). Not significantly better than `@3,2` on the same games
+(30 vs 23 won only by one, p ≈ 0.41) for ~2.4× the time: `@3,2` is the
+sweet spot for now.
+
+### Self-play with the net as teacher (expert iteration, round 1)
+
+`selfplay.ts --net FILE.json@3,2` uses the value-net bot as the teacher (same
+record format). Runs `net-r1` (700 games, seed 7, ids 0–699) and `net-r1b`
+(300 games, ids 10000+) with `rank_v2_c16@3,2`, ~350–450 ms/piece per worker.
+Plan: `npm run candidates` on both, fine-tune `rank_v2_c16` with
+`train_rank.py` on them, duel the result at `@3,2` vs hard and vs the old net.
+
 ## Project background
 
 **Goal.** A Tetris bot whose network judges a board *together with the upcoming

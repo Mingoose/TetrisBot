@@ -13,27 +13,35 @@
 //              piece, top K2 of each of those with the piece after; see findBestMoveDeep)
 // Options: --games N --workers N --pieces N (cap per bot; draw if both reach it)
 //          --pps N --seed N --out FILE.jsonl (one line per game)
+//          --record DIR  also write both sides' moves as self-play records
+//                        (record.ts; game id = 2 × duel game + board 0/1) and a
+//                        side file per worker with ready garbage and, for net
+//                        moves, the search's expanded moves and scores
 
 import { Worker, isMainThread, parentPort, workerData } from 'node:worker_threads';
 import { availableParallelism } from 'node:os';
-import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { ALL_PIECE_TYPES } from '../src/pieces';
-import { RULES } from '../src/rules';
-import { initBotVsBotData, applyBotMove, bvbLookahead, BotBoard, CombatState } from '../src/versus';
+import { initBotVsBotData, applyBotMove, botBagMask, bvbLookahead, BotBoard, CombatState } from '../src/versus';
 import { findBestMoveHard } from '../src/ai';
 import { ValueNet, ValueNetFile } from '../src/valueNet';
-import { findBestMoveDeep, BotMove } from '../src/valueBot';
+import type { PieceType } from '../src/types';
+import { searchDeep, searchStateFor, SearchResult } from '../src/valueBot';
+import {
+  NO_PIECE, PIECE_ORDER, RECORD_FIELDS, RECORD_SIZE, SEARCH_FIELDS, SEARCH_SIZE, TERMINAL_DIED, TERMINAL_NONE,
+  TERMINAL_TRUNCATED, PositionRecord, writeRecord, writeSearchRecord,
+} from './record';
 
 interface Config {
   a: string; b: string; games: number; workers: number; pieces: number;
-  pps: number; seed: number; out: string;
+  pps: number; seed: number; out: string; record: string;
 }
 
 const DEFAULTS: Config = {
   a: '', b: 'hard', games: 100, workers: Math.max(1, availableParallelism() - 2),
-  pieces: 1000, pps: 2, seed: 1, out: '',
+  pieces: 1000, pps: 2, seed: 1, out: '', record: '',
 };
 
 interface SideStats { pieces: number; attack: number; lines: number; thinkMs: number; dead: boolean }
@@ -56,45 +64,32 @@ function gameSeed(seed: number, gameId: number): number {
 
 // ---- Bots ----
 
-type Think = (bot: BotBoard, combat: CombatState, now: number) => BotMove;
+type Think = (bot: BotBoard, combat: CombatState, now: number) => SearchResult;
 
 function makeBot(spec: string): Think {
   const [kind, ...rest] = spec.split(':');
   if (kind === 'hard') {
     const [w, d] = rest.length ? rest.map(Number) : [32, 5];
-    return (bot, combat) => findBestMoveHard(
-      { ...bot, bagState: bvbLookahead(bot, 30) }, combat.pendingGarbage, w, d, combat.combo, combat.b2b);
+    return (bot, combat) => ({
+      move: findBestMoveHard(
+        { ...bot, bagState: bvbLookahead(bot, 30) }, combat.pendingGarbage, w, d, combat.combo, combat.b2b),
+      expanded: [],
+    });
   }
   if (kind === 'net') {
     const [path, k] = rest.join(':').split('@');
     const widths = k ? k.split(',').map(Number) : [];
     const net = new ValueNet(JSON.parse(readFileSync(path, 'utf8')) as ValueNetFile);
-    return (bot, combat, now) => {
-      // The bag as a set: the pieces left before the next 7-piece boundary of the shared sequence.
-      const left = (7 - bot.pieceIndex % 7) % 7;
-      let bagMask = left ? 0 : 0x7f;
-      for (const p of bvbLookahead(bot, left)) bagMask |= 1 << ALL_PIECE_TYPES.indexOf(p);
-      // Queued garbage rows, and those that would land on a non-clearing lock now
-      // (finished travelling, at most the cap; versus.ts tankGarbage).
-      const pendingCols: number[] = [];
-      let ready = 0;
-      for (const chunk of combat.incoming) {
-        for (let i = 0; i < chunk.amount; i++) pendingCols.push(chunk.column);
-        if (chunk.readyAt <= now && ready === pendingCols.length - chunk.amount) ready = pendingCols.length;
-      }
-      const landingCols = pendingCols.slice(0, Math.min(ready, RULES.garbageCap));
-      return findBestMoveDeep({
-        board: bot.board, active: bot.active.type, hold: bot.hold, queue: bot.nextQueue,
-        bagMask, combo: combat.combo, b2b: combat.b2b, landingCols, pendingCols,
-      }, net, widths);
-    };
+    return (bot, combat, now) => searchDeep(searchStateFor(bot, combat, botBagMask(bot), now), net, widths);
   }
   throw new Error(`Unknown bot spec: ${spec}`);
 }
 
 // ---- One game ----
 
-function playGame(cfg: Config, gameId: number, bots: [Think, Think]): GameResult {
+interface Recorded { records: Buffer; search: Buffer }
+
+function playGame(cfg: Config, gameId: number, bots: [Think, Think], rec?: Recorded[]): GameResult {
   Math.random = mulberry32(gameSeed(cfg.seed, gameId));
   const d = initBotVsBotData();
   const aSide = (gameId % 2) as 0 | 1;            // which board bot A plays this game
@@ -105,19 +100,52 @@ function playGame(cfg: Config, gameId: number, bots: [Think, Think]): GameResult
   const first = aSide; // bot A moves first at equal times; swaps with the sides
 
   const interval = 1000 / cfg.pps;
+  // Records per board, finished after the game (the last one's terminal flag depends on how it ends).
+  const recs: PositionRecord[][] = [[], []];
+  const searches: Parameters<typeof writeSearchRecord>[2][][] = [[], []];
+  const pieceIdx = (p: PieceType | null) => (p ? PIECE_ORDER.indexOf(p) : NO_PIECE);
   while (!boards[0].dead && !boards[1].dead) {
     // Next to move: the side with fewer pieces placed (ties go to `first`).
     const s = stats[0].pieces === stats[1].pieces ? first : stats[0].pieces < stats[1].pieces ? 0 : 1;
     if (stats[s].pieces >= cfg.pieces) break;
     const now = stats[s].pieces * interval;
+    const bot = boards[s], combat = combats[s];
+    const before = rec && {
+      board: Uint16Array.from(bot.board.map(row => row.reduce<number>((m, c, i) => (c ? m | (1 << i) : m), 0))),
+      active: pieceIdx(bot.active.type), hold: pieceIdx(bot.hold),
+      queue: bot.nextQueue.slice(0, 5).map(pieceIdx), bagMask: botBagMask(bot),
+      combo: combat.combo, b2b: combat.b2b, incoming: combat.pendingGarbage,
+      ready: searchStateFor(bot, combat, 0, now).landingCols.length,
+    };
     const t0 = performance.now();
-    const move = thinks[s](boards[s], combats[s], now);
+    const { move, expanded } = thinks[s](bot, combat, now);
     stats[s].thinkMs += performance.now() - t0;
-    applyBotMove(move, boards[s], combats[s], combats[1 - s], o => {
+    applyBotMove(move, bot, combat, combats[1 - s], o => {
       stats[s].attack += o.attack;
       stats[s].lines += o.lines;
+      if (!before) return;
+      const id = gameId * 2 + s;
+      recs[s].push({
+        gameId: id, ply: stats[s].pieces, ...before,
+        moveRot: move.rotationIndex, moveX: move.x, moveY: move.y, moveHold: move.useHold, moveRandom: false,
+        lines: o.lines, attack: o.attack, spin: o.spin, surge: o.surge, perfectClear: o.perfectClear,
+        garbageIn: o.garbageIn, terminal: TERMINAL_NONE,
+      });
+      searches[s].push({ gameId: id, ply: stats[s].pieces, ready: before.ready, expanded });
     }, now);
     stats[s].pieces++;
+  }
+  if (rec) {
+    for (const s of [0, 1]) {
+      const last = recs[s][recs[s].length - 1];
+      // A loss is a death; a win or the piece cap just ends the game.
+      if (last) last.terminal = boards[s].dead ? TERMINAL_DIED : TERMINAL_TRUNCATED;
+      const r = Buffer.alloc(recs[s].length * RECORD_SIZE);
+      recs[s].reduce((o, x) => writeRecord(r, o, x), 0);
+      const q = Buffer.alloc(searches[s].length * SEARCH_SIZE);
+      searches[s].reduce((o, x) => writeSearchRecord(q, o, x), 0);
+      rec.push({ records: r, search: q });
+    }
   }
   stats[0].dead = boards[0].dead;
   stats[1].dead = boards[1].dead;
@@ -129,12 +157,18 @@ function playGame(cfg: Config, gameId: number, bots: [Think, Think]): GameResult
 // ---- Worker ----
 
 function runWorker(): void {
-  const { cfg } = workerData as { cfg: Config };
+  const { cfg, workerId } = workerData as { cfg: Config; workerId: number };
   const bots: [Think, Think] = [makeBot(cfg.a), makeBot(cfg.b)];
   parentPort!.on('message', (msg: { type: 'game'; gameId: number } | { type: 'stop' }) => {
     if (msg.type === 'stop') process.exit(0);
     try {
-      parentPort!.postMessage(playGame(cfg, msg.gameId, bots));
+      const rec: Recorded[] | undefined = cfg.record ? [] : undefined;
+      const result = playGame(cfg, msg.gameId, bots, rec);
+      for (const r of rec ?? []) {
+        appendFileSync(join(cfg.record, `w${workerId}.bin`), r.records);
+        appendFileSync(join(cfg.record, `s${workerId}.bin`), r.search);
+      }
+      parentPort!.postMessage(result);
     } catch (err) {
       parentPort!.postMessage({ type: 'failed', gameId: msg.gameId, error: String((err as Error).stack ?? err) });
     }
@@ -148,12 +182,12 @@ function parseArgs(argv: string[]): Config {
   const cfg = { ...DEFAULTS };
   const keys: Record<string, keyof Config> = {
     '--a': 'a', '--b': 'b', '--games': 'games', '--workers': 'workers', '--pieces': 'pieces',
-    '--pps': 'pps', '--seed': 'seed', '--out': 'out',
+    '--pps': 'pps', '--seed': 'seed', '--out': 'out', '--record': 'record',
   };
   for (let i = 0; i < argv.length; i += 2) {
     const key = keys[argv[i]];
     if (!key || argv[i + 1] === undefined) throw new Error(`Unknown or incomplete option: ${argv[i]}`);
-    (cfg as Record<string, unknown>)[key] = ['a', 'b', 'out'].includes(key) ? argv[i + 1] : Number(argv[i + 1]);
+    (cfg as Record<string, unknown>)[key] = ['a', 'b', 'out', 'record'].includes(key) ? argv[i + 1] : Number(argv[i + 1]);
   }
   if (!cfg.a) throw new Error('--a BOT is required');
   return cfg;
@@ -181,6 +215,17 @@ function summarize(cfg: Config, results: GameResult[]): void {
 function runMain(): void {
   const cfg = parseArgs(process.argv.slice(2));
   if (cfg.out) writeFileSync(cfg.out, '');
+  if (cfg.record) {
+    const metaPath = join(cfg.record, 'meta.json');
+    if (existsSync(metaPath)) throw new Error(`${cfg.record} already contains a run; pick a new --record`);
+    mkdirSync(cfg.record, { recursive: true });
+    // Same meta layout as selfplay.ts, so selfplay_data.py and candidates.ts read it unchanged.
+    writeFileSync(metaPath, JSON.stringify({
+      config: { ...cfg, net: cfg.a.startsWith('net:') ? cfg.a.slice(4) : '', beam: 32, depth: 5, source: 'duel' },
+      record_size: RECORD_SIZE, fields: RECORD_FIELDS, piece_order: PIECE_ORDER,
+      search_size: SEARCH_SIZE, search_fields: SEARCH_FIELDS, started: new Date().toISOString(),
+    }, null, 2));
+  }
   console.log(`${cfg.a} vs ${cfg.b}: ${cfg.games} games on ${cfg.workers} workers, ${cfg.pps} pps, seed ${cfg.seed}`);
 
   const results: GameResult[] = [];
@@ -188,7 +233,7 @@ function runMain(): void {
   const t0 = performance.now();
   const workerFile = fileURLToPath(import.meta.url);
   for (let id = 0; id < cfg.workers; id++) {
-    const w = new Worker(workerFile, { workerData: { cfg } });
+    const w = new Worker(workerFile, { workerData: { cfg, workerId: id } });
     const dispatch = () => {
       if (nextGame < cfg.games) w.postMessage({ type: 'game', gameId: nextGame++ });
       else {

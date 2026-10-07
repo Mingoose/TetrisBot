@@ -51,7 +51,9 @@ def summarize(run_dir: str) -> None:
     games = np.unique(recs['game_id'])
     teacher = recs['move_random'] == 0
     print(f'{run_dir}: {len(recs)} positions from {len(games)} games')
-    print(f"  teacher W{meta['config']['beam']} D{meta['config']['depth']}, "
+    cfg = meta['config']
+    who = f"net {cfg['net']}" if cfg.get('net') else f"W{cfg['beam']} D{cfg['depth']}"
+    print(f"  teacher {who}, "
           f"random moves {np.mean(~teacher):.1%}")
     if 'spin' in recs.dtype.names:  # current format (TETR.IO rules)
         spins = f"spins {int((recs['spin'] == 2).sum())} full / {int((recs['spin'] == 1).sum())} mini, " \

@@ -19,7 +19,26 @@ export interface ValueNetFile {
   config: { channels: number; squeeze: number; hidden: number; context_size: number };
   label_mean: number;
   label_std: number;
-  weights: Record<string, { shape: number[]; data: number[] }>;
+  weights: Record<string, { shape: number[]; data: ArrayLike<number> }>;
+}
+
+/** The compact app format from export_value_ts.py --app: a manifest plus one float32 blob. */
+export interface ValueNetManifest {
+  config: ValueNetFile['config'];
+  label_mean: number;
+  label_std: number;
+  tensors: { name: string; shape: number[]; offset: number }[];
+}
+
+export function valueNetFromBinary(manifest: ValueNetManifest, blob: ArrayBuffer): ValueNetFile {
+  const all = new Float32Array(blob);
+  const weights: ValueNetFile['weights'] = {};
+  for (const t of manifest.tensors) {
+    const size = t.shape.reduce((a, b) => a * b, 1);
+    if (t.offset + size > all.length) throw new Error(`value net blob too short for ${t.name}`);
+    weights[t.name] = { shape: t.shape, data: all.subarray(t.offset, t.offset + size) };
+  }
+  return { config: manifest.config, label_mean: manifest.label_mean, label_std: manifest.label_std, weights };
 }
 
 export const pieceIndex = (p: PieceType | null): number => (p ? ALL_PIECE_TYPES.indexOf(p) : NO_PIECE);

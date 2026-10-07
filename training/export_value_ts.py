@@ -8,13 +8,19 @@ built for the resulting sample (afterstate board, context vector, net output),
 so tetris-web/harness/valuecheck.ts can confirm the TypeScript side matches
 and measure how often the net picks the teacher's move.
 
+With --app DIR it instead writes the compact files the web app loads:
+DIR/value_net.json (config, label scaling, tensor shapes and offsets) and
+DIR/value_net.bin (all weights as little-endian float32), no check positions.
+
 Usage:
     .venv/bin/python export_value_ts.py models/value_v2_c16.pt \\
         --out models/value_v2_c16.json data/runs/teacher-v2 data/runs/teacher-v2b
+    .venv/bin/python export_value_ts.py models/rank_v2_c16.pt --app ../tetris-web/public/models
 """
 
 import argparse
 import json
+import os
 
 import numpy as np
 import torch
@@ -27,8 +33,9 @@ from value_net import ValueNet
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('ckpt')
-    ap.add_argument('runs', nargs='+', help='the runs the net was trained on (to find validation games)')
-    ap.add_argument('--out', required=True)
+    ap.add_argument('runs', nargs='*', help='the runs the net was trained on (to find validation games)')
+    ap.add_argument('--out', help='JSON with weights and check positions (needs the runs)')
+    ap.add_argument('--app', help='directory to write value_net.json + value_net.bin for the web app')
     ap.add_argument('--checks', type=int, default=1000, help='validation positions to include')
     args = ap.parse_args()
 
@@ -37,6 +44,12 @@ def main():
     model.load_state_dict(ckpt['state_dict'])
     model.eval()
     a = ckpt['args']
+
+    if args.app:
+        export_app(ckpt, args.app)
+    if not args.out:
+        return
+    assert args.runs, '--out needs the training runs to pick check positions'
 
     # Rebuild samples exactly as train_value.py does, keeping each sample's record.
     per_run = []
@@ -83,6 +96,21 @@ def main():
         json.dump({'config': ckpt['config'], 'label_mean': ckpt['label_mean'], 'label_std': ckpt['label_std'],
                    'weights': weights, 'checks': checks}, f)
     print(f'{args.out}: {sum(np.prod(w["shape"]) for w in weights.values()):,} weights, {len(checks)} checks')
+
+
+def export_app(ckpt, out_dir):
+    tensors, offset, blobs = [], 0, []
+    for name, v in ckpt['state_dict'].items():
+        data = v.detach().cpu().numpy().astype('<f4').ravel()
+        tensors.append({'name': name, 'shape': list(v.shape), 'offset': offset})
+        offset += data.size
+        blobs.append(data)
+    os.makedirs(out_dir, exist_ok=True)
+    np.concatenate(blobs).tofile(os.path.join(out_dir, 'value_net.bin'))
+    with open(os.path.join(out_dir, 'value_net.json'), 'w') as f:
+        json.dump({'config': ckpt['config'], 'label_mean': ckpt['label_mean'], 'label_std': ckpt['label_std'],
+                   'tensors': tensors}, f, indent=1)
+    print(f'{out_dir}/value_net.json + value_net.bin: {offset:,} weights ({offset * 4 / 1e6:.2f} MB)')
 
 
 if __name__ == '__main__':

@@ -148,7 +148,7 @@ export function draw(
   bot1Name = 'BOT',
   bot2Name = 'BOT',
   keybindings: KeyBindings = DEFAULT_KEYBINDINGS,
-  _cnnReady = false,
+  _valueNetReady = false,
   pressedBtn: ButtonRect | null = null,
 ): void {
   // Background — fill the full (possibly wider) canvas

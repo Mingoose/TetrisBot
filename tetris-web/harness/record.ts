@@ -99,3 +99,43 @@ export function writeRecord(buf: Buffer, offset: number, r: PositionRecord): num
   o = buf.writeUInt8(r.terminal, o);
   return o;
 }
+
+// Side file written next to the records by duel.ts --record (s<N>.bin): what a
+// record alone doesn't hold. `ready` is the garbage rows that would land on a
+// non-clearing move (at most the cap); for a value-net move, n > 0 and the
+// moves its search expanded with their deep scores (valueBot.ts searchDeep).
+export const SEARCH_K = 3;
+export const SEARCH_FIELDS: [string, string, number][] = [
+  ['game_id',   '<u4', 1],
+  ['ply',       '<u2', 1],
+  ['ready',     'u1',  1],
+  ['n',         'u1',  1],
+  ['move_rot',  'u1',  SEARCH_K],
+  ['move_x',    'i1',  SEARCH_K],
+  ['move_y',    'i1',  SEARCH_K],
+  ['move_hold', 'u1',  SEARCH_K],
+  ['score',     '<f4', SEARCH_K],
+];
+export const SEARCH_SIZE = 8 + SEARCH_K * 8;
+
+export interface SearchRecord {
+  gameId: number;
+  ply: number;
+  ready: number;
+  expanded: { move: { rotationIndex: number; x: number; y: number; useHold: boolean }; score: number }[];
+}
+
+export function writeSearchRecord(buf: Buffer, offset: number, r: SearchRecord): number {
+  let o = offset;
+  const e = r.expanded.slice(0, SEARCH_K);
+  o = buf.writeUInt32LE(r.gameId, o);
+  o = buf.writeUInt16LE(r.ply, o);
+  o = buf.writeUInt8(clampU8(r.ready), o);
+  o = buf.writeUInt8(e.length, o);
+  for (let i = 0; i < SEARCH_K; i++) o = buf.writeUInt8(e[i]?.move.rotationIndex ?? 0, o);
+  for (let i = 0; i < SEARCH_K; i++) o = buf.writeInt8(e[i]?.move.x ?? 0, o);
+  for (let i = 0; i < SEARCH_K; i++) o = buf.writeInt8(e[i]?.move.y ?? 0, o);
+  for (let i = 0; i < SEARCH_K; i++) o = buf.writeUInt8(e[i]?.move.useHold ? 1 : 0, o);
+  for (let i = 0; i < SEARCH_K; i++) o = buf.writeFloatLE(e[i]?.score ?? 0, o);
+  return o;
+}

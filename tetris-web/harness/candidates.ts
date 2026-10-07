@@ -5,7 +5,9 @@
 // would score (same move generator, spins, attack and context inputs) and marks
 // the teacher's. Writes two files into the run directory:
 //   cand_pos.bin  one entry per decision: game_id u4, ply u2, first candidate u4,
-//                 candidate count u2, teacher's index i2 (-1 if not found)
+//                 candidate count u2, teacher's index i2 (-1 if not found), and
+//                 for runs recorded by duel.ts --record, the candidates the
+//                 value-net search expanded (indices, -1 = none) and their deep scores
 //   cand.bin      one entry per candidate (layout in CAND_FIELDS)
 // Python reads them with training/rank_data.py.
 //
@@ -18,10 +20,11 @@ import { join } from 'node:path';
 import { BOARD_COLS, BOARD_ROWS } from '../src/board';
 import { RULES } from '../src/rules';
 import { listCandidates } from '../src/valueBot';
-import { PIECE_ORDER, NO_PIECE, RECORD_FIELDS, RECORD_SIZE } from './record';
+import { PIECE_ORDER, NO_PIECE, RECORD_FIELDS, RECORD_SIZE, SEARCH_K, SEARCH_SIZE } from './record';
 
 export const POS_FIELDS: [string, string, number][] = [
   ['game_id', '<u4', 1], ['ply', '<u2', 1], ['first', '<u4', 1], ['count', '<u2', 1], ['teacher', '<i2', 1],
+  ['soft_idx', '<i2', SEARCH_K], ['soft_score', '<f4', SEARCH_K],
 ];
 export const CAND_FIELDS: [string, string, number][] = [
   ['board', '<u2', 20],   // after line clears, before garbage; row 0 = top
@@ -35,7 +38,7 @@ export const CAND_FIELDS: [string, string, number][] = [
   ['lines', 'u1', 1],
   ['dies', 'u1', 1],
 ];
-const POS_SIZE = 14;
+const POS_SIZE = 14 + SEARCH_K * 6;
 const CAND_SIZE = 40 + 12;
 
 // ---- Reading records ----
@@ -68,11 +71,38 @@ function readRecords(runDir: string): Rec[] {
   return recs.sort((a, b) => (a.game_id as number) - (b.game_id as number) || (a.ply as number) - (b.ply as number));
 }
 
+interface SideEntry {
+  ready: number;
+  expanded: { rot: number; x: number; y: number; hold: boolean; score: number }[];
+}
+
+// Side-file entries per (game, ply) from a duel.ts --record run, or null if the run has none.
+function readSide(runDir: string): Map<number, SideEntry> | null {
+  const files = readdirSync(runDir).filter(f => /^s\d+\.bin$/.test(f));
+  if (!files.length) return null;
+  const map = new Map<number, SideEntry>();
+  for (const f of files) {
+    const buf = readFileSync(join(runDir, f));
+    for (let o = 0; o + SEARCH_SIZE <= buf.length; o += SEARCH_SIZE) {
+      const n = buf.readUInt8(o + 7);
+      const at = (field: number, i: number) => o + 8 + field * SEARCH_K + i;
+      const expanded = Array.from({ length: n }, (_, i) => ({
+        rot: buf.readUInt8(at(0, i)), x: buf.readInt8(at(1, i)), y: buf.readInt8(at(2, i)),
+        hold: buf.readUInt8(at(3, i)) === 1, score: buf.readFloatLE(o + 8 + 4 * SEARCH_K + 4 * i),
+      }));
+      map.set(buf.readUInt32LE(o) * 65536 + buf.readUInt16LE(o + 4), { ready: buf.readUInt8(o + 6), expanded });
+    }
+  }
+  return map;
+}
+
 // ---- Main ----
 
 const runDir = process.argv[2];
 if (!runDir) throw new Error('usage: candidates RUN_DIR');
 const recs = readRecords(runDir);
+const side = readSide(runDir);
+let softMissing = 0;
 const piece = (i: number) => PIECE_ORDER[i];
 
 const posBuf = Buffer.alloc(recs.length * POS_SIZE);
@@ -93,9 +123,14 @@ for (let i = 0; i < recs.length; i++) {
   // Garbage ready to land: what was still queued after the previous move. In
   // self-play an attack arrives just before a move and needs 20 frames to travel,
   // so everything older than this ply has arrived (selfplay.ts, pps 2).
+  // Runs recorded by duel.ts --record store it in their side file instead.
   let ready = 0;
   const p = i > 0 && recs[i - 1].game_id === r.game_id ? recs[i - 1] : null;
-  if (p) {
+  const entry = side?.get((r.game_id as number) * 65536 + (r.ply as number));
+  if (side) {
+    if (!entry) throw new Error(`no side-file entry for game ${r.game_id} ply ${r.ply}`);
+    ready = entry.ready;
+  } else if (p) {
     const cancelled = (p.lines as number) > 0 ? Math.min(p.attack as number, p.incoming as number) : 0;
     ready = (p.incoming as number) - (p.garbage_in as number) - cancelled;
   }
@@ -125,7 +160,15 @@ for (let i = 0; i < recs.length; i++) {
   o = posBuf.writeUInt16LE(r.ply as number, o);
   o = posBuf.writeUInt32LE(nCand, o);
   o = posBuf.writeUInt16LE(cands.length, o);
-  posBuf.writeInt16LE(teacher, o);
+  o = posBuf.writeInt16LE(teacher, o);
+  const soft = (entry?.expanded ?? []).map(e => {
+    const k = cands.findIndex(c => c.move.rotationIndex === e.rot && c.move.x === e.x && c.move.y === e.y
+      && c.move.useHold === e.hold);
+    if (k < 0) softMissing++;
+    return { k, score: e.score };
+  });
+  for (let k = 0; k < SEARCH_K; k++) o = posBuf.writeInt16LE(soft[k]?.k ?? -1, o);
+  for (let k = 0; k < SEARCH_K; k++) o = posBuf.writeFloatLE(soft[k]?.score ?? 0, o);
   nPos++;
 
   for (const c of cands) {
@@ -154,6 +197,7 @@ writeFileSync(join(runDir, 'candidates.json'), JSON.stringify({
 }, null, 2));
 console.log(`${runDir}: ${nPos} decisions, ${nCand} candidates (${(nCand / nPos).toFixed(1)} each) ` +
   `in ${((performance.now() - t0) / 1000).toFixed(0)} s`);
+if (side) console.log(`search-expanded moves not found among candidates: ${softMissing}`);
 console.log(`teacher move not found: ${notFound}; ready-garbage reconstruction wrong on ` +
   `${landingMismatch}/${landingChecked} non-clearing teacher moves`);
-if (landingMismatch) process.exitCode = 1;
+if (landingMismatch || softMissing) process.exitCode = 1;
