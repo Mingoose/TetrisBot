@@ -176,14 +176,30 @@ ms/move (shared CPU). Not significantly better than `@3,2` on the same games
 (30 vs 23 won only by one, p ≈ 0.41) for ~2.4× the time: `@3,2` is the
 sweet spot for now.
 
-### Self-play with the net as teacher (expert iteration, round 1)
+### Self-improvement rounds (both failed the gate; app keeps rank_v2_c16@3,2)
 
-`selfplay.ts --net FILE.json@3,2` uses the value-net bot as the teacher (same
-record format). Runs `net-r1` (700 games, seed 7, ids 0–699) and `net-r1b`
-(300 games, ids 10000+) with `rank_v2_c16@3,2`, ~350–450 ms/piece per worker.
-Plan: `npm run candidates` on both, fine-tune `rank_v2_c16` with
-`train_rank.py` on them, duel the result at `@3,2` vs hard and vs the old net.
+All duels: @3,2, 200 games, benchmark seed 1 (training data used other seeds).
 
+**Round 1** (`rank_r1_c16`): self-play `net-r1/r1b/r1c` (305K positions, teacher
+`rank_v2_c16@3,2`, random garbage); hard targets = the search's pick; new data
+only; lr 1e-3. vs hard: 136–64 (epoch 4) / 128–72 (epoch 30), both significantly
+worse than rank_v2's 161–39. Likely causes: targets only reorder the old net's
+top 3 (teacher-in-top-3 fell 99% → 91%), no anchor data, and the label scaling
+was recomputed on the new data (stretched V by ~18% vs attack; fixed since).
+
+**Round 2** (`rank_r2_c16`): `duel.ts --record` games vs hard (`vs-r2`, 800
+games, seed 11, 275K positions); net side trained toward its own search's soft
+scores over the expanded moves, hard side value-only; `teacher-v2/v2b` as a 50%
+anchor; lr 3e-4, 12 epochs, init scaling kept. Search agreement 65.9% → 68.1%,
+anchor top-3 held (65.5%). Gate vs rank_v2: **100–100** (fails, needs ~55%).
+vs hard: 150–50 vs rank_v2's 161–39 (paired 30 vs 41, p ≈ 0.24).
+
+Pattern in both rounds: the new nets attack more (0.68–0.73 attack/piece vs
+0.62) but do not win more. Working hypothesis: the search scores lines mostly
+by attack and the label (12-piece attack, −10 on death) underprices risk, so
+distilling the search makes the net more aggressive than winning rewards.
+Next lever is the objective (survival-weighted or win/loss-based value labels),
+not the data source.
 ## Project background
 
 **Goal.** A Tetris bot whose network judges a board *together with the upcoming
