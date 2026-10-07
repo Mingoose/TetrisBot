@@ -198,8 +198,16 @@ Pattern in both rounds: the new nets attack more (0.68–0.73 attack/piece vs
 0.62) but do not win more. Working hypothesis: the search scores lines mostly
 by attack and the label (12-piece attack, −10 on death) underprices risk, so
 distilling the search makes the net more aggressive than winning rewards.
-Next lever is the objective (survival-weighted or win/loss-based value labels),
-not the data source.
+
+**Round 3, survival-weighted** (`surv_c16`): same data and settings as round 2
+but no search targets (`--soft-weight 0`) and `--death-penalty 30`. Attack/piece
+vs hard 0.65 (between rank_v2's 0.62 and round 2's 0.68). Gate vs rank_v2:
+**88–111–1** (fails, p ≈ 0.12); vs hard 155–45 (paired 34 vs 40, p ≈ 0.56).
+So the aggression hypothesis is not supported: lowering it didn't win more.
+
+Three fine-tunes of rank_v2 on net-generated data (self-play or versus), with
+three different targets, all came out equal or worse. rank_v2_c16@3,2 remains
+the best bot. Untested: win/loss value labels from the versus games.
 ## Project background
 
 **Goal.** A Tetris bot whose network judges a board *together with the upcoming
