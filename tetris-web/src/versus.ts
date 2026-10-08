@@ -272,10 +272,13 @@ export function requestBotMove(
   worker: Worker,
   bot: BotBoard,
   combat: CombatState,
-  aiParams?: { beamWidth: number; searchDepth: number; advancedEval?: boolean; valueNet?: number[] },
+  aiParams?: { beamWidth: number; searchDepth: number; advancedEval?: boolean; valueNet?: number[]; searchMs?: number },
 ): void {
   if (aiParams?.valueNet) {
-    worker.postMessage({ valueNet: aiParams.valueNet, state: searchStateFor(bot, combat, botBagMask(bot), performance.now()) });
+    worker.postMessage({
+      valueNet: aiParams.valueNet, searchMs: aiParams.searchMs ?? 1000,
+      state: searchStateFor(bot, combat, botBagMask(bot), performance.now()),
+    });
     return;
   }
   const { pendingGarbage, combo, b2b } = combat;

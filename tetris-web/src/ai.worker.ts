@@ -2,7 +2,7 @@ import { findBestMove, findBestMoveHard, analyzePositionHard } from './ai';
 import type { BotBoard } from './versus';
 import type { EngineRequest } from './engine';
 import { ValueNet, ValueNetManifest, valueNetFromBinary } from './valueNet';
-import { findBestMoveDeep, ValueSearchState } from './valueBot';
+import { findBestMoveTimed, ValueSearchState } from './valueBot';
 
 // Load the value net (experimental difficulty) as soon as the worker starts, and
 // tell main.ts whether it is available so the menu can enable the difficulty.
@@ -27,7 +27,7 @@ netReady.then(
 self.onmessage = (e: MessageEvent) => {
   const data = e.data as
     | { type: 'analyze'; request: EngineRequest }
-    | { type?: undefined; valueNet: number[]; state: ValueSearchState }
+    | { type?: undefined; valueNet: number[]; searchMs: number; state: ValueSearchState }
     | { type?: undefined; valueNet?: undefined; bot: BotBoard; pendingGarbage: number; combo?: number; b2b?: number; beamWidth?: number; searchDepth?: number; advancedEval?: boolean };
 
   if (data.type === 'analyze') {
@@ -37,12 +37,11 @@ self.onmessage = (e: MessageEvent) => {
   }
 
   if (data.valueNet) {
-    const { valueNet: widths, state } = data;
+    const { valueNet: widths, searchMs, state } = data;
     netReady
       .then(net => {
-        const t0 = performance.now();
-        const move = findBestMoveDeep(state, net, widths);
-        if (import.meta.env.DEV) console.debug(`[worker] value net move in ${(performance.now() - t0).toFixed(0)} ms`);
+        const { move, widths: used, ms } = findBestMoveTimed(state, net, widths, searchMs);
+        if (import.meta.env.DEV) console.debug(`[worker] value net move @${used.join(',')} in ${ms.toFixed(0)} ms`);
         self.postMessage(move);
       })
       .catch(err => self.postMessage({ error: String(err) }));

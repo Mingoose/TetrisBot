@@ -108,7 +108,7 @@ export class ValueNet {
   constructor(file: ValueNetFile) {
     const { channels, squeeze, hidden, context_size } = file.config;
     if (context_size !== CONTEXT_SIZE) throw new Error(`context size ${context_size}, expected ${CONTEXT_SIZE}`);
-    if (channels % 2) throw new Error(`channels must be even, got ${channels}`);
+    if (channels % 4) throw new Error(`channels must be a multiple of 4, got ${channels}`);
     this.channels = channels;
     this.squeeze = squeeze;
     this.hidden = hidden;
@@ -245,51 +245,60 @@ export class ValueNet {
   // 3×3 convolution, padding 1, + ReLU, for board rows startRow and below. src
   // holds `cin` padded planes; dst gets `channels` padded planes. Rows above
   // startRow and the outer border are left as they are; the pad columns inside
-  // the computed rows are re-zeroed. Two output channels × four cells at a time,
-  // so each loaded input and weight feeds several multiply-adds.
+  // the computed rows are re-zeroed. Four output channels × four cells at a time
+  // with a sliding window, so each loaded input feeds 12 multiply-adds.
   private conv3x3(src: Float32Array, dst: Float32Array, w: Float32Array, b: Float32Array, cin: number, startRow: number): void {
     const C = this.channels;
     const p0 = (startRow + 1) * PW + 1;
-    for (let co = 0; co < C; co += 2) {
-      const ob0 = co * PLANE, ob1 = ob0 + PLANE;
-      const b0 = b[co], b1 = b[co + 1];
-      const wc0 = co * cin * 9, wc1 = wc0 + cin * 9;
+    const K = cin * 9; // weights per output channel
+    for (let co = 0; co < C; co += 4) {
+      const o0 = co * PLANE, o1 = o0 + PLANE, o2 = o1 + PLANE, o3 = o2 + PLANE;
+      const b0 = b[co], b1 = b[co + 1], b2 = b[co + 2], b3 = b[co + 3];
       let p = p0;
       for (; p + 4 <= RUN_END; p += 4) {
-        let a0 = b0, a1 = b0, a2 = b0, a3 = b0, c0 = b1, c1 = b1, c2 = b1, c3 = b1;
+        let a0 = b0, a1 = b0, a2 = b0, a3 = b0;
+        let c0 = b1, c1 = b1, c2 = b1, c3 = b1;
+        let d0 = b2, d1 = b2, d2 = b2, d3 = b2;
+        let e0 = b3, e1 = b3, e2 = b3, e3 = b3;
+        let wk = co * K;
         for (let ci = 0; ci < cin; ci++) {
-          const ib = ci * PLANE + p;
-          const w0b = wc0 + ci * 9, w1b = wc1 + ci * 9;
-          for (let k = 0; k < 9; k++) {
-            const q = ib + TAPS[k];
-            const s0 = src[q], s1 = src[q + 1], s2 = src[q + 2], s3 = src[q + 3];
-            const w0 = w[w0b + k], w1 = w[w1b + k];
-            a0 += w0 * s0; a1 += w0 * s1; a2 += w0 * s2; a3 += w0 * s3;
-            c0 += w1 * s0; c1 += w1 * s1; c2 += w1 * s2; c3 += w1 * s3;
+          // Per kernel row, the 6 inputs x0..x5 cover the three horizontal taps of four cells.
+          let q = ci * PLANE + p - PW - 1;
+          for (let ky = 0; ky < 3; ky++, q += PW, wk += 3) {
+            const x0 = src[q], x1 = src[q + 1], x2 = src[q + 2], x3 = src[q + 3], x4 = src[q + 4], x5 = src[q + 5];
+            let u0 = w[wk], u1 = w[wk + 1], u2 = w[wk + 2];
+            a0 += u0 * x0 + u1 * x1 + u2 * x2; a1 += u0 * x1 + u1 * x2 + u2 * x3;
+            a2 += u0 * x2 + u1 * x3 + u2 * x4; a3 += u0 * x3 + u1 * x4 + u2 * x5;
+            u0 = w[wk + K]; u1 = w[wk + K + 1]; u2 = w[wk + K + 2];
+            c0 += u0 * x0 + u1 * x1 + u2 * x2; c1 += u0 * x1 + u1 * x2 + u2 * x3;
+            c2 += u0 * x2 + u1 * x3 + u2 * x4; c3 += u0 * x3 + u1 * x4 + u2 * x5;
+            u0 = w[wk + 2 * K]; u1 = w[wk + 2 * K + 1]; u2 = w[wk + 2 * K + 2];
+            d0 += u0 * x0 + u1 * x1 + u2 * x2; d1 += u0 * x1 + u1 * x2 + u2 * x3;
+            d2 += u0 * x2 + u1 * x3 + u2 * x4; d3 += u0 * x3 + u1 * x4 + u2 * x5;
+            u0 = w[wk + 3 * K]; u1 = w[wk + 3 * K + 1]; u2 = w[wk + 3 * K + 2];
+            e0 += u0 * x0 + u1 * x1 + u2 * x2; e1 += u0 * x1 + u1 * x2 + u2 * x3;
+            e2 += u0 * x2 + u1 * x3 + u2 * x4; e3 += u0 * x3 + u1 * x4 + u2 * x5;
           }
         }
-        dst[ob0 + p] = a0 > 0 ? a0 : 0; dst[ob0 + p + 1] = a1 > 0 ? a1 : 0;
-        dst[ob0 + p + 2] = a2 > 0 ? a2 : 0; dst[ob0 + p + 3] = a3 > 0 ? a3 : 0;
-        dst[ob1 + p] = c0 > 0 ? c0 : 0; dst[ob1 + p + 1] = c1 > 0 ? c1 : 0;
-        dst[ob1 + p + 2] = c2 > 0 ? c2 : 0; dst[ob1 + p + 3] = c3 > 0 ? c3 : 0;
+        dst[o0 + p] = a0 > 0 ? a0 : 0; dst[o0 + p + 1] = a1 > 0 ? a1 : 0; dst[o0 + p + 2] = a2 > 0 ? a2 : 0; dst[o0 + p + 3] = a3 > 0 ? a3 : 0;
+        dst[o1 + p] = c0 > 0 ? c0 : 0; dst[o1 + p + 1] = c1 > 0 ? c1 : 0; dst[o1 + p + 2] = c2 > 0 ? c2 : 0; dst[o1 + p + 3] = c3 > 0 ? c3 : 0;
+        dst[o2 + p] = d0 > 0 ? d0 : 0; dst[o2 + p + 1] = d1 > 0 ? d1 : 0; dst[o2 + p + 2] = d2 > 0 ? d2 : 0; dst[o2 + p + 3] = d3 > 0 ? d3 : 0;
+        dst[o3 + p] = e0 > 0 ? e0 : 0; dst[o3 + p + 1] = e1 > 0 ? e1 : 0; dst[o3 + p + 2] = e2 > 0 ? e2 : 0; dst[o3 + p + 3] = e3 > 0 ? e3 : 0;
       }
       for (; p < RUN_END; p++) {
-        let a0 = b0, c0 = b1;
-        for (let ci = 0; ci < cin; ci++) {
-          const ib = ci * PLANE + p;
-          for (let k = 0; k < 9; k++) {
-            const sv = src[ib + TAPS[k]];
-            a0 += w[wc0 + ci * 9 + k] * sv;
-            c0 += w[wc1 + ci * 9 + k] * sv;
+        for (let j = 0; j < 4; j++) {
+          let acc = b[co + j];
+          const wb = (co + j) * K;
+          for (let ci = 0; ci < cin; ci++) {
+            const ib = ci * PLANE + p;
+            for (let k = 0; k < 9; k++) acc += w[wb + ci * 9 + k] * src[ib + TAPS[k]];
           }
+          dst[o0 + j * PLANE + p] = acc > 0 ? acc : 0;
         }
-        dst[ob0 + p] = a0 > 0 ? a0 : 0;
-        dst[ob1 + p] = c0 > 0 ? c0 : 0;
       }
       // The computed run wrote into the pad columns between rows; zero them.
       for (let r = startRow + 1; r <= BOARD_ROWS; r++) {
-        dst[ob0 + r * PW] = 0; dst[ob0 + r * PW + PW - 1] = 0;
-        dst[ob1 + r * PW] = 0; dst[ob1 + r * PW + PW - 1] = 0;
+        for (const o of [o0, o1, o2, o3]) { dst[o + r * PW] = 0; dst[o + r * PW + PW - 1] = 0; }
       }
     }
   }

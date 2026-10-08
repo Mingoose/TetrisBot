@@ -157,33 +157,92 @@ export function findBestMoveDeep(state: ValueSearchState, net: ValueNet, widths:
   return searchDeep(state, net, widths).move;
 }
 
+/**
+ * Time-aware search for the app (iterative deepening): search with the first
+ * width of `maxWidths`, then add one ply at a time while the time budget allows.
+ * A deeper pass is only started if its estimated cost fits, and is abandoned at
+ * the deadline, keeping the last completed result. Passes share scored
+ * positions, so each one pays only for its new ply; a slow machine ends up with
+ * a shallower search instead of missing the move deadline.
+ */
+export function findBestMoveTimed(
+  state: ValueSearchState, net: ValueNet, maxWidths: number[], budgetMs: number,
+): { move: BotMove; widths: number[]; ms: number } {
+  const t0 = performance.now();
+  const memo: Memo = new Map();
+  let depth = Math.min(1, maxWidths.length);
+  let widths = maxWidths.slice(0, depth);
+  const first: SearchCtx = { memo, deadline: Infinity, scored: 0 };
+  let result = searchDeep(state, net, widths, first);
+  // Time per scored position (one candidate list run through the net), measured.
+  const perList = (performance.now() - t0) / Math.max(1, first.scored ?? 0);
+  while (depth < maxWidths.length) {
+    // The next pass only scores the new leaves: one list per line at the new depth.
+    const newLists = maxWidths.slice(0, depth + 1).reduce((a, b) => a * b, 1);
+    if (performance.now() - t0 + perList * newLists > budgetMs) break;
+    const deeper = maxWidths.slice(0, depth + 1);
+    try {
+      result = searchDeep(state, net, deeper, { memo, deadline: t0 + budgetMs, scored: 0 });
+    } catch (e) {
+      if (e !== TIMEOUT) throw e;
+      break;
+    }
+    widths = deeper;
+    depth++;
+  }
+  return { move: result.move, widths, ms: performance.now() - t0 };
+}
+
 /** The root moves the search expanded, with their deep scores (attack along the line + leaf value). */
 export interface SearchResult {
   move: BotMove;
   expanded: { move: BotMove; score: number }[];
 }
 
-export function searchDeep(state: ValueSearchState, net: ValueNet, widths: number[]): SearchResult {
-  const board = cellBoardToBm(state.board);
-  const roots = scoreOn(candidatesOn(board, state), state.bagMask, net);
+type Scored = (ValueCandidate & { ctx: Float32Array })[];
+type Memo = Map<string, Scored>;
+interface SearchCtx { memo?: Memo; deadline: number; scored?: number }
+const TIMEOUT = Symbol('search timeout');
+const moveKey = (m: BotMove) => `${m.rotationIndex},${m.x},${m.y},${m.useHold ? 1 : 0}`;
+
+export function searchDeep(state: ValueSearchState, net: ValueNet, widths: number[], sc: SearchCtx = { deadline: Infinity }): SearchResult {
+  let roots = sc.memo?.get('');
+  if (!roots) {
+    roots = scoreOn(candidatesOn(cellBoardToBm(state.board), state), state.bagMask, net);
+    sc.memo?.set('', roots);
+    if (sc.scored !== undefined) sc.scored++;
+  }
   const live = roots.filter(c => !c.dies).slice(0, widths[0] ?? 0);
   if (live.length <= 1) return { move: roots[0]?.move ?? NO_MOVE, expanded: [] };
-  const expanded = live.map(c => ({ move: c.move, score: c.attack + lineValue(state, c, net, widths, 1) }));
+  const expanded = live.map(c => ({
+    move: c.move, score: c.attack + lineValue(state, c, net, widths, 1, sc, moveKey(c.move)),
+  }));
   let best = expanded[0];
   for (const e of expanded) if (e.score > best.score) best = e;
   return { move: best.move, expanded };
 }
 
 // Best score reachable from the position `c` leaves: attack + value one ply on,
-// or deeper while widths[depth] says to keep expanding.
-function lineValue(state: SearchFields, c: Candidate, net: ValueNet, widths: number[], depth: number): number {
+// or deeper while widths[depth] says to keep expanding. `path` names the line
+// for the memo.
+function lineValue(
+  state: SearchFields, c: Candidate, net: ValueNet, widths: number[], depth: number, sc: SearchCtx, path: string,
+): number {
+  if (performance.now() > sc.deadline) throw TIMEOUT;
   const child = positionAfter(state, c);
-  const scored = scoreOn(candidatesOn(child.board, child.state), child.state.bagMask, net);
+  let scored = sc.memo?.get(path);
+  if (!scored) {
+    scored = scoreOn(candidatesOn(child.board, child.state), child.state.bagMask, net);
+    sc.memo?.set(path, scored);
+    if (sc.scored !== undefined) sc.scored++;
+  }
   if (!scored.length) return DEATH_SCORE;
   const live = depth < widths.length ? scored.filter(x => !x.dies).slice(0, widths[depth]) : [];
   if (!live.length) return scored[0].score;
   let best = -Infinity;
-  for (const x of live) best = Math.max(best, x.attack + lineValue(child.state, x, net, widths, depth + 1));
+  for (const x of live) {
+    best = Math.max(best, x.attack + lineValue(child.state, x, net, widths, depth + 1, sc, `${path}|${moveKey(x.move)}`));
+  }
   return best;
 }
 

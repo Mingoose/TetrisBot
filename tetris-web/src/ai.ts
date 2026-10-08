@@ -12,12 +12,13 @@ const BEAM_WIDTH = 20;
 const SEARCH_DEPTH = 4;
 
 export type AiDifficulty = 'easy' | 'medium' | 'hard' | 'experimental';
-// valueNet: the value-net bot (valueBot.ts) with these search widths instead of the beam search.
-export const AI_DIFFICULTY_PARAMS: Record<AiDifficulty, { beamWidth: number; searchDepth: number; advancedEval: boolean; valueNet?: number[]; label: string; subtitle: string }> = {
+// valueNet: the value-net bot (valueBot.ts findBestMoveTimed) instead of the beam search,
+// searching up to these widths within searchMs (the app falls back to another bot at 2 s).
+export const AI_DIFFICULTY_PARAMS: Record<AiDifficulty, { beamWidth: number; searchDepth: number; advancedEval: boolean; valueNet?: number[]; searchMs?: number; label: string; subtitle: string }> = {
   easy:         { beamWidth: 1,  searchDepth: 1, advancedEval: false,                  label: 'EASY',         subtitle: 'greedy one-piece' },
   medium:       { beamWidth: 20, searchDepth: 4, advancedEval: false,                  label: 'MEDIUM',       subtitle: 'beam search' },
   hard:         { beamWidth: 32, searchDepth: 5, advancedEval: true,                   label: 'HARD',         subtitle: 'beam search+' },
-  experimental: { beamWidth: 0,  searchDepth: 0, advancedEval: false, valueNet: [3, 2], label: 'EXPERIMENTAL', subtitle: 'value net' },
+  experimental: { beamWidth: 0,  searchDepth: 0, advancedEval: false, valueNet: [3, 2, 2], searchMs: 1200, label: 'EXPERIMENTAL', subtitle: 'value net' },
 };
 
 // Module-level bag used only for beam search simulation.
