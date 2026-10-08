@@ -1,0 +1,40 @@
+device: mps
+data/runs/net-r1: 185344 decisions, 12870149 candidates, 179646 with labels
+data/runs/net-r1b: 80668 decisions, 5604772 candidates, 78138 with labels
+data/runs/net-r1c: 38148 decisions, 2648471 candidates, 37026 with labels
+274692 training / 29468 validation decisions (scoring 20000), label mean 5.049 std 3.568
+initialised from models/rank_v2_c16.pt
+model: 238,409 params
+before training: val value 0.4375 R² -0.064 rank 1.612 top1 66.5% top3 99.3%
+epoch   1  train value 0.4049 rank 1.523 | val value 0.4110 R² -0.017 rank 1.511 top1 65.1% top3 93.2%  (151s) *
+epoch   2  train value 0.4004 rank 1.505 | val value 0.4229 R² -0.055 rank 1.502 top1 65.0% top3 92.9%  (138s)
+epoch   3  train value 0.3994 rank 1.497 | val value 0.4267 R² -0.081 rank 1.507 top1 64.8% top3 92.9%  (138s)
+epoch   4  train value 0.3958 rank 1.489 | val value 0.4169 R² -0.050 rank 1.496 top1 64.8% top3 92.7%  (138s) *
+epoch   5  train value 0.3952 rank 1.483 | val value 0.3951 R² 0.024 rank 1.519 top1 65.2% top3 92.4%  (135s)
+epoch   6  train value 0.3932 rank 1.476 | val value 0.3993 R² 0.016 rank 1.534 top1 64.0% top3 91.6%  (135s)
+epoch   7  train value 0.3914 rank 1.470 | val value 0.4117 R² -0.029 rank 1.507 top1 64.8% top3 92.6%  (136s)
+epoch   8  train value 0.3910 rank 1.465 | val value 0.4111 R² -0.032 rank 1.505 top1 64.7% top3 92.1%  (135s)
+epoch   9  train value 0.3897 rank 1.457 | val value 0.4201 R² -0.042 rank 1.495 top1 64.5% top3 92.0%  (135s)
+epoch  10  train value 0.3885 rank 1.452 | val value 0.4200 R² -0.055 rank 1.497 top1 64.3% top3 91.6%  (136s)
+epoch  11  train value 0.3888 rank 1.446 | val value 0.4082 R² -0.017 rank 1.508 top1 64.4% top3 91.9%  (136s)
+epoch  12  train value 0.3871 rank 1.440 | val value 0.4223 R² -0.068 rank 1.497 top1 64.7% top3 92.2%  (136s)
+epoch  13  train value 0.3868 rank 1.435 | val value 0.4195 R² -0.059 rank 1.508 top1 64.7% top3 91.7%  (137s)
+epoch  14  train value 0.3851 rank 1.431 | val value 0.4176 R² -0.050 rank 1.501 top1 64.6% top3 91.7%  (136s)
+epoch  15  train value 0.3839 rank 1.425 | val value 0.4157 R² -0.044 rank 1.510 top1 64.3% top3 91.8%  (137s)
+epoch  16  train value 0.3833 rank 1.419 | val value 0.4134 R² -0.031 rank 1.506 top1 64.2% top3 91.4%  (137s)
+epoch  17  train value 0.3827 rank 1.412 | val value 0.4430 R² -0.142 rank 1.498 top1 64.4% top3 91.6%  (138s)
+epoch  18  train value 0.3817 rank 1.408 | val value 0.4201 R² -0.069 rank 1.507 top1 64.4% top3 91.4%  (137s)
+epoch  19  train value 0.3803 rank 1.407 | val value 0.4194 R² -0.062 rank 1.508 top1 64.3% top3 91.4%  (136s)
+epoch  20  train value 0.3795 rank 1.400 | val value 0.4179 R² -0.058 rank 1.510 top1 64.3% top3 91.4%  (137s)
+epoch  21  train value 0.3788 rank 1.397 | val value 0.4274 R² -0.090 rank 1.508 top1 64.4% top3 91.3%  (137s)
+epoch  22  train value 0.3775 rank 1.391 | val value 0.4281 R² -0.099 rank 1.504 top1 64.5% top3 91.2%  (137s)
+epoch  23  train value 0.3765 rank 1.386 | val value 0.4285 R² -0.096 rank 1.505 top1 64.2% top3 91.4%  (136s)
+epoch  24  train value 0.3769 rank 1.383 | val value 0.4255 R² -0.087 rank 1.509 top1 64.2% top3 91.1%  (137s)
+epoch  25  train value 0.3765 rank 1.379 | val value 0.4332 R² -0.116 rank 1.505 top1 64.3% top3 91.2%  (138s)
+epoch  26  train value 0.3759 rank 1.378 | val value 0.4281 R² -0.098 rank 1.508 top1 64.2% top3 91.2%  (137s)
+epoch  27  train value 0.3767 rank 1.376 | val value 0.4280 R² -0.099 rank 1.508 top1 64.2% top3 91.2%  (138s)
+epoch  28  train value 0.3761 rank 1.373 | val value 0.4309 R² -0.111 rank 1.508 top1 64.1% top3 91.1%  (136s)
+epoch  29  train value 0.3767 rank 1.371 | val value 0.4281 R² -0.099 rank 1.508 top1 64.3% top3 91.2%  (138s)
+epoch  30  train value 0.3767 rank 1.372 | val value 0.4282 R² -0.099 rank 1.509 top1 64.2% top3 91.1%  (138s)
+
+best checkpoint (epoch 4) → models/rank_r1_c16.pt; last epoch → models/rank_r1_c16.last.pt

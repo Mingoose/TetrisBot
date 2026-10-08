@@ -1,0 +1,8 @@
+context                     T-slot      flat   slot − flat
+T is next                     5.71      2.69   +3.02
+T in hold                     6.28      2.99   +3.29
+T 4th in queue                5.03      2.68   +2.35
+no T seen, T in bag           5.49      3.11   +2.37
+no T until next bag           5.39      2.91   +2.48
+
+Values are predicted future attack (≈ garbage lines over the next ~12 pieces).

@@ -1,0 +1,23 @@
+device: mps
+data/runs/teacher-v2: 215484 decisions, 14919686 candidates, 208587 with labels, teacher targets (anchor)
+data/runs/teacher-v2b: 578991 decisions, 40087968 candidates, 560258 with labels, teacher targets (anchor)
+data/runs/vs-r2: 273288 decisions, 18884678 candidates, 264466 with labels, 136612 with search targets
+962892 training / 104871 validation decisions (scoring 20000), label mean 4.234 std 3.018
+per epoch: 100000 anchor + 100000 new decisions
+initialised from models/rank_v2_c16.pt
+model: 238,409 params
+before training: val value 0.5103 R² 0.066 rank 2.042 top1 35.2% top3 65.7% soft 1.143 agree 65.9%
+epoch   1  train value 0.5938 rank 2.015 soft 1.145 | val value 0.5344 R² 0.042 rank 2.041 top1 35.0% top3 65.2% soft 1.142 agree 66.6%  (180s) *
+epoch   2  train value 0.5960 rank 2.011 soft 1.143 | val value 0.5459 R² 0.033 rank 2.030 top1 35.3% top3 65.7% soft 1.161 agree 65.5%  (169s)
+epoch   3  train value 0.5933 rank 2.009 soft 1.143 | val value 0.5377 R² 0.034 rank 2.027 top1 35.2% top3 65.5% soft 1.151 agree 66.0%  (159s) *
+epoch   4  train value 0.6008 rank 2.001 soft 1.141 | val value 0.5174 R² 0.062 rank 2.047 top1 35.0% top3 65.4% soft 1.130 agree 66.9%  (159s)
+epoch   5  train value 0.5979 rank 2.002 soft 1.139 | val value 0.5280 R² 0.050 rank 2.037 top1 35.1% top3 65.7% soft 1.138 agree 66.3%  (157s)
+epoch   6  train value 0.5937 rank 2.000 soft 1.137 | val value 0.5352 R² 0.031 rank 2.026 top1 35.2% top3 65.7% soft 1.144 agree 66.4%  (159s) *
+epoch   7  train value 0.5986 rank 1.991 soft 1.139 | val value 0.5212 R² 0.052 rank 2.038 top1 35.2% top3 65.8% soft 1.131 agree 67.2%  (157s) *
+epoch   8  train value 0.5933 rank 1.995 soft 1.137 | val value 0.5226 R² 0.052 rank 2.032 top1 35.3% top3 65.8% soft 1.137 agree 66.3%  (156s) *
+epoch   9  train value 0.5930 rank 1.982 soft 1.136 | val value 0.5276 R² 0.051 rank 2.024 top1 35.3% top3 65.7% soft 1.136 agree 66.5%  (157s) *
+epoch  10  train value 0.5941 rank 1.980 soft 1.137 | val value 0.5297 R² 0.046 rank 2.023 top1 35.5% top3 65.8% soft 1.134 agree 67.1%  (468s)
+epoch  11  train value 0.5929 rank 1.985 soft 1.133 | val value 0.5268 R² 0.050 rank 2.023 top1 35.3% top3 65.9% soft 1.135 agree 66.5%  (159s) *
+epoch  12  train value 0.5912 rank 1.990 soft 1.135 | val value 0.5307 R² 0.047 rank 2.019 top1 35.5% top3 65.9% soft 1.140 agree 66.2%  (158s) *
+
+best checkpoint (epoch 12) → models/surv_c16.pt; last epoch → models/surv_c16.last.pt

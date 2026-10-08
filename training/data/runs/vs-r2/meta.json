@@ -1,0 +1,188 @@
+{
+  "config": {
+    "a": "net:../training/models/rank_v2_c16.json@3,2",
+    "b": "hard",
+    "games": 800,
+    "workers": 9,
+    "pieces": 1000,
+    "pps": 2,
+    "seed": 11,
+    "out": "../training/data/duels/vs-r2-gen.jsonl",
+    "record": "../training/data/runs/vs-r2",
+    "net": "../training/models/rank_v2_c16.json@3,2",
+    "beam": 32,
+    "depth": 5,
+    "source": "duel"
+  },
+  "record_size": 69,
+  "fields": [
+    [
+      "game_id",
+      "<u4",
+      1
+    ],
+    [
+      "ply",
+      "<u2",
+      1
+    ],
+    [
+      "board",
+      "<u2",
+      20
+    ],
+    [
+      "active",
+      "u1",
+      1
+    ],
+    [
+      "hold",
+      "u1",
+      1
+    ],
+    [
+      "queue",
+      "u1",
+      5
+    ],
+    [
+      "bag_mask",
+      "u1",
+      1
+    ],
+    [
+      "combo",
+      "i1",
+      1
+    ],
+    [
+      "b2b",
+      "i1",
+      1
+    ],
+    [
+      "incoming",
+      "u1",
+      1
+    ],
+    [
+      "move_rot",
+      "u1",
+      1
+    ],
+    [
+      "move_x",
+      "i1",
+      1
+    ],
+    [
+      "move_y",
+      "i1",
+      1
+    ],
+    [
+      "move_hold",
+      "u1",
+      1
+    ],
+    [
+      "move_random",
+      "u1",
+      1
+    ],
+    [
+      "lines",
+      "u1",
+      1
+    ],
+    [
+      "attack",
+      "u1",
+      1
+    ],
+    [
+      "spin",
+      "u1",
+      1
+    ],
+    [
+      "surge",
+      "u1",
+      1
+    ],
+    [
+      "perfect_clear",
+      "u1",
+      1
+    ],
+    [
+      "garbage_in",
+      "u1",
+      1
+    ],
+    [
+      "terminal",
+      "u1",
+      1
+    ]
+  ],
+  "piece_order": [
+    "I",
+    "O",
+    "T",
+    "S",
+    "Z",
+    "J",
+    "L"
+  ],
+  "search_size": 32,
+  "search_fields": [
+    [
+      "game_id",
+      "<u4",
+      1
+    ],
+    [
+      "ply",
+      "<u2",
+      1
+    ],
+    [
+      "ready",
+      "u1",
+      1
+    ],
+    [
+      "n",
+      "u1",
+      1
+    ],
+    [
+      "move_rot",
+      "u1",
+      3
+    ],
+    [
+      "move_x",
+      "i1",
+      3
+    ],
+    [
+      "move_y",
+      "i1",
+      3
+    ],
+    [
+      "move_hold",
+      "u1",
+      3
+    ],
+    [
+      "score",
+      "<f4",
+      3
+    ]
+  ],
+  "started": "2026-10-07T14:59:38.998Z"
+}

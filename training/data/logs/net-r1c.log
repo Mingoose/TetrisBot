@@ -1,0 +1,155 @@
+Warning: Ignoring extra certs from `/Users/etchee/code/MyriadRootCA.pem`, load failed: error:80000002:system library::No such file or directory
+Teacher net ../training/models/rank_v2_c16.json@3,2, eps 0.05, garbage 0.2/piece, 150 games × ≤300 pieces on 5 workers → ../training/data/runs/net-r1c
+game 20003: 45 pieces, 15 lines, attack 11, died (444 ms/piece) — 1/150 games, 2.2 positions/s overall
+game 20005: 39 pieces, 11 lines, attack 2, died (493 ms/piece) — 2/150 games, 2.1 positions/s overall
+game 20000: 300 pieces, 132 lines, attack 111 (403 ms/piece) — 3/150 games, 3.2 positions/s overall
+game 20001: 278 pieces, 127 lines, attack 103, died (437 ms/piece) — 4/150 games, 5.4 positions/s overall
+game 20004: 300 pieces, 140 lines, attack 132 (422 ms/piece) — 5/150 games, 7.6 positions/s overall
+game 20002: 300 pieces, 155 lines, attack 164 (426 ms/piece) — 6/150 games, 9.9 positions/s overall
+game 20006: 300 pieces, 159 lines, attack 181 (410 ms/piece) — 7/150 games, 9.6 positions/s overall
+game 20010: 82 pieces, 30 lines, attack 27, died (480 ms/piece) — 8/150 games, 9.8 positions/s overall
+game 20009: 143 pieces, 56 lines, attack 46, died (422 ms/piece) — 9/150 games, 9.5 positions/s overall
+game 20012: 45 pieces, 17 lines, attack 9, died (613 ms/piece) — 10/150 games, 9.4 positions/s overall
+game 20007: 255 pieces, 122 lines, attack 151, died (414 ms/piece) — 11/150 games, 9.2 positions/s overall
+game 20008: 300 pieces, 155 lines, attack 131 (408 ms/piece) — 12/150 games, 9.8 positions/s overall
+game 20011: 295 pieces, 130 lines, attack 129, died (408 ms/piece) — 13/150 games, 9.5 positions/s overall
+game 20014: 300 pieces, 151 lines, attack 161 (396 ms/piece) — 14/150 games, 9.5 positions/s overall
+game 20013: 287 pieces, 140 lines, attack 136, died (449 ms/piece) — 15/150 games, 10.3 positions/s overall
+game 20015: 300 pieces, 165 lines, attack 145 (439 ms/piece) — 16/150 games, 10.0 positions/s overall
+game 20018: 112 pieces, 50 lines, attack 41, died (410 ms/piece) — 17/150 games, 10.2 positions/s overall
+game 20016: 300 pieces, 153 lines, attack 155 (400 ms/piece) — 18/150 games, 10.9 positions/s overall
+game 20017: 300 pieces, 168 lines, attack 168 (446 ms/piece) — 19/150 games, 10.3 positions/s overall
+game 20019: 300 pieces, 143 lines, attack 165 (386 ms/piece) — 20/150 games, 10.6 positions/s overall
+game 20021: 204 pieces, 99 lines, attack 113, died (400 ms/piece) — 21/150 games, 10.8 positions/s overall
+game 20022: 300 pieces, 155 lines, attack 156 (400 ms/piece) — 22/150 games, 10.5 positions/s overall
+game 20020: 300 pieces, 158 lines, attack 159 (448 ms/piece) — 23/150 games, 10.9 positions/s overall
+game 20023: 205 pieces, 97 lines, attack 98, died (400 ms/piece) — 24/150 games, 11.2 positions/s overall
+game 20024: 300 pieces, 158 lines, attack 132 (424 ms/piece) — 25/150 games, 10.5 positions/s overall
+game 20025: 300 pieces, 168 lines, attack 180 (481 ms/piece) — 26/150 games, 10.6 positions/s overall
+game 20029: 51 pieces, 19 lines, attack 16, died (1117 ms/piece) — 27/150 games, 10.1 positions/s overall
+game 20026: 300 pieces, 140 lines, attack 140 (567 ms/piece) — 28/150 games, 10.0 positions/s overall
+game 20027: 300 pieces, 137 lines, attack 146 (540 ms/piece) — 29/150 games, 10.4 positions/s overall
+game 20028: 300 pieces, 157 lines, attack 136 (676 ms/piece) — 30/150 games, 10.2 positions/s overall
+game 20034: 107 pieces, 47 lines, attack 48, died (696 ms/piece) — 31/150 games, 9.3 positions/s overall
+game 20030: 300 pieces, 162 lines, attack 158 (793 ms/piece) — 32/150 games, 9.2 positions/s overall
+game 20031: 300 pieces, 156 lines, attack 160 (23111 ms/piece) — 33/150 games, 1.0 positions/s overall
+game 20032: 300 pieces, 138 lines, attack 134 (35051 ms/piece) — 34/150 games, 0.7 positions/s overall
+game 20033: 300 pieces, 178 lines, attack 153 (35092 ms/piece) — 35/150 games, 0.8 positions/s overall
+game 20036: 300 pieces, 155 lines, attack 141 (41570 ms/piece) — 36/150 games, 0.7 positions/s overall
+game 20035: 300 pieces, 163 lines, attack 165 (41799 ms/piece) — 37/150 games, 0.7 positions/s overall
+game 20038: 177 pieces, 91 lines, attack 81, died (12210 ms/piece) — 38/150 games, 0.7 positions/s overall
+game 20037: 300 pieces, 147 lines, attack 124 (19532 ms/piece) — 39/150 games, 0.7 positions/s overall
+game 20039: 300 pieces, 159 lines, attack 164 (7496 ms/piece) — 40/150 games, 0.7 positions/s overall
+game 20041: 158 pieces, 70 lines, attack 68, died (824 ms/piece) — 41/150 games, 0.7 positions/s overall
+game 20040: 300 pieces, 162 lines, attack 154 (748 ms/piece) — 42/150 games, 0.8 positions/s overall
+game 20042: 300 pieces, 148 lines, attack 157 (628 ms/piece) — 43/150 games, 0.8 positions/s overall
+game 20043: 300 pieces, 148 lines, attack 137 (518 ms/piece) — 44/150 games, 0.8 positions/s overall
+game 20044: 300 pieces, 157 lines, attack 158 (483 ms/piece) — 45/150 games, 0.8 positions/s overall
+game 20046: 160 pieces, 75 lines, attack 62, died (436 ms/piece) — 46/150 games, 0.8 positions/s overall
+game 20045: 300 pieces, 142 lines, attack 121 (480 ms/piece) — 47/150 games, 0.9 positions/s overall
+game 20051: 36 pieces, 11 lines, attack 6, died (478 ms/piece) — 48/150 games, 0.9 positions/s overall
+game 20047: 300 pieces, 165 lines, attack 219 (429 ms/piece) — 49/150 games, 0.9 positions/s overall
+game 20050: 123 pieces, 58 lines, attack 47, died (481 ms/piece) — 50/150 games, 0.9 positions/s overall
+game 20048: 276 pieces, 142 lines, attack 163, died (447 ms/piece) — 51/150 games, 0.9 positions/s overall
+game 20049: 300 pieces, 148 lines, attack 149 (399 ms/piece) — 52/150 games, 0.9 positions/s overall
+game 20054: 170 pieces, 71 lines, attack 77, died (456 ms/piece) — 53/150 games, 0.9 positions/s overall
+game 20052: 300 pieces, 157 lines, attack 135 (442 ms/piece) — 54/150 games, 1.0 positions/s overall
+game 20053: 300 pieces, 153 lines, attack 154 (434 ms/piece) — 55/150 games, 1.0 positions/s overall
+game 20055: 272 pieces, 121 lines, attack 127, died (424 ms/piece) — 56/150 games, 1.0 positions/s overall
+game 20056: 300 pieces, 152 lines, attack 129 (442 ms/piece) — 57/150 games, 1.0 positions/s overall
+game 20058: 271 pieces, 133 lines, attack 147, died (445 ms/piece) — 58/150 games, 1.0 positions/s overall
+game 20057: 300 pieces, 171 lines, attack 171 (488 ms/piece) — 59/150 games, 1.1 positions/s overall
+game 20059: 300 pieces, 152 lines, attack 192 (397 ms/piece) — 60/150 games, 1.1 positions/s overall
+game 20060: 300 pieces, 170 lines, attack 169 (421 ms/piece) — 61/150 games, 1.1 positions/s overall
+game 20061: 300 pieces, 140 lines, attack 135 (435 ms/piece) — 62/150 games, 1.1 positions/s overall
+game 20066: 11 pieces, 2 lines, attack 0, died (328 ms/piece) — 63/150 games, 1.1 positions/s overall
+game 20062: 300 pieces, 138 lines, attack 125 (428 ms/piece) — 64/150 games, 1.1 positions/s overall
+game 20063: 300 pieces, 157 lines, attack 163 (439 ms/piece) — 65/150 games, 1.1 positions/s overall
+game 20067: 101 pieces, 38 lines, attack 36, died (436 ms/piece) — 66/150 games, 1.2 positions/s overall
+game 20065: 205 pieces, 99 lines, attack 117, died (409 ms/piece) — 67/150 games, 1.2 positions/s overall
+game 20064: 300 pieces, 157 lines, attack 163 (400 ms/piece) — 68/150 games, 1.2 positions/s overall
+game 20070: 46 pieces, 15 lines, attack 9, died (536 ms/piece) — 69/150 games, 1.2 positions/s overall
+game 20073: 191 pieces, 89 lines, attack 77, died (415 ms/piece) — 70/150 games, 1.2 positions/s overall
+game 20068: 300 pieces, 155 lines, attack 171 (455 ms/piece) — 71/150 games, 1.2 positions/s overall
+game 20069: 300 pieces, 141 lines, attack 125 (440 ms/piece) — 72/150 games, 1.2 positions/s overall
+game 20071: 300 pieces, 157 lines, attack 158 (426 ms/piece) — 73/150 games, 1.3 positions/s overall
+game 20072: 300 pieces, 150 lines, attack 149 (478 ms/piece) — 74/150 games, 1.3 positions/s overall
+game 20077: 112 pieces, 62 lines, attack 53, died (432 ms/piece) — 75/150 games, 1.3 positions/s overall
+game 20076: 235 pieces, 111 lines, attack 107, died (447 ms/piece) — 76/150 games, 1.3 positions/s overall
+game 20075: 300 pieces, 151 lines, attack 169 (394 ms/piece) — 77/150 games, 1.3 positions/s overall
+game 20074: 300 pieces, 157 lines, attack 139 (469 ms/piece) — 78/150 games, 1.3 positions/s overall
+game 20079: 153 pieces, 67 lines, attack 53, died (506 ms/piece) — 79/150 games, 1.3 positions/s overall
+game 20080: 73 pieces, 35 lines, attack 32, died (431 ms/piece) — 80/150 games, 1.4 positions/s overall
+game 20078: 300 pieces, 157 lines, attack 169 (424 ms/piece) — 81/150 games, 1.4 positions/s overall
+game 20082: 225 pieces, 111 lines, attack 133, died (432 ms/piece) — 82/150 games, 1.4 positions/s overall
+game 20081: 300 pieces, 164 lines, attack 147 (452 ms/piece) — 83/150 games, 1.4 positions/s overall
+game 20084: 300 pieces, 149 lines, attack 156 (392 ms/piece) — 84/150 games, 1.4 positions/s overall
+game 20083: 300 pieces, 164 lines, attack 174 (422 ms/piece) — 85/150 games, 1.4 positions/s overall
+game 20085: 300 pieces, 156 lines, attack 166 (438 ms/piece) — 86/150 games, 1.5 positions/s overall
+game 20086: 300 pieces, 165 lines, attack 156 (479 ms/piece) — 87/150 games, 1.5 positions/s overall
+game 20087: 300 pieces, 150 lines, attack 133 (437 ms/piece) — 88/150 games, 1.5 positions/s overall
+game 20089: 300 pieces, 149 lines, attack 131 (397 ms/piece) — 89/150 games, 1.5 positions/s overall
+game 20088: 300 pieces, 172 lines, attack 173 (431 ms/piece) — 90/150 games, 1.5 positions/s overall
+game 20090: 300 pieces, 156 lines, attack 126 (492 ms/piece) — 91/150 games, 1.5 positions/s overall
+game 20092: 153 pieces, 72 lines, attack 69, died (403 ms/piece) — 92/150 games, 1.6 positions/s overall
+game 20091: 300 pieces, 143 lines, attack 161 (409 ms/piece) — 93/150 games, 1.6 positions/s overall
+game 20093: 272 pieces, 147 lines, attack 127, died (430 ms/piece) — 94/150 games, 1.6 positions/s overall
+game 20094: 300 pieces, 146 lines, attack 135 (382 ms/piece) — 95/150 games, 1.6 positions/s overall
+game 20096: 300 pieces, 151 lines, attack 171 (379 ms/piece) — 96/150 games, 1.6 positions/s overall
+game 20097: 193 pieces, 92 lines, attack 89, died (436 ms/piece) — 97/150 games, 1.6 positions/s overall
+game 20095: 300 pieces, 166 lines, attack 157 (449 ms/piece) — 98/150 games, 1.7 positions/s overall
+game 20099: 300 pieces, 152 lines, attack 167 (375 ms/piece) — 99/150 games, 1.7 positions/s overall
+game 20098: 300 pieces, 155 lines, attack 172 (423 ms/piece) — 100/150 games, 1.7 positions/s overall
+game 20101: 300 pieces, 161 lines, attack 166 (19264 ms/piece) — 101/150 games, 1.2 positions/s overall
+game 20102: 300 pieces, 147 lines, attack 134 (19306 ms/piece) — 102/150 games, 1.2 positions/s overall
+game 20100: 300 pieces, 166 lines, attack 111 (19424 ms/piece) — 103/150 games, 1.3 positions/s overall
+game 20103: 300 pieces, 157 lines, attack 128 (19268 ms/piece) — 104/150 games, 1.3 positions/s overall
+game 20104: 300 pieces, 159 lines, attack 178 (19242 ms/piece) — 105/150 games, 1.3 positions/s overall
+game 20106: 188 pieces, 91 lines, attack 64, died (507 ms/piece) — 106/150 games, 1.3 positions/s overall
+game 20105: 300 pieces, 161 lines, attack 179 (419 ms/piece) — 107/150 games, 1.3 positions/s overall
+game 20109: 300 pieces, 145 lines, attack 139 (363 ms/piece) — 108/150 games, 1.3 positions/s overall
+game 20107: 300 pieces, 171 lines, attack 157 (423 ms/piece) — 109/150 games, 1.3 positions/s overall
+game 20110: 137 pieces, 66 lines, attack 59, died (433 ms/piece) — 110/150 games, 1.3 positions/s overall
+game 20108: 300 pieces, 154 lines, attack 137 (466 ms/piece) — 111/150 games, 1.4 positions/s overall
+game 20111: 300 pieces, 163 lines, attack 133 (398 ms/piece) — 112/150 games, 1.4 positions/s overall
+game 20114: 194 pieces, 91 lines, attack 60, died (460 ms/piece) — 113/150 games, 1.4 positions/s overall
+game 20113: 300 pieces, 147 lines, attack 146 (454 ms/piece) — 114/150 games, 1.4 positions/s overall
+game 20112: 300 pieces, 152 lines, attack 121 (474 ms/piece) — 115/150 games, 1.4 positions/s overall
+game 20115: 300 pieces, 153 lines, attack 148 (384 ms/piece) — 116/150 games, 1.4 positions/s overall
+game 20116: 300 pieces, 144 lines, attack 172 (371 ms/piece) — 117/150 games, 1.4 positions/s overall
+game 20117: 223 pieces, 90 lines, attack 112, died (438 ms/piece) — 118/150 games, 1.4 positions/s overall
+game 20119: 189 pieces, 96 lines, attack 94, died (395 ms/piece) — 119/150 games, 1.4 positions/s overall
+game 20118: 240 pieces, 111 lines, attack 100, died (447 ms/piece) — 120/150 games, 1.5 positions/s overall
+game 20120: 300 pieces, 147 lines, attack 154 (448 ms/piece) — 121/150 games, 1.5 positions/s overall
+game 20121: 197 pieces, 90 lines, attack 74, died (543 ms/piece) — 122/150 games, 1.5 positions/s overall
+game 20122: 300 pieces, 142 lines, attack 173 (425 ms/piece) — 123/150 games, 1.5 positions/s overall
+game 20123: 300 pieces, 151 lines, attack 153 (495 ms/piece) — 124/150 games, 1.5 positions/s overall
+game 20124: 300 pieces, 144 lines, attack 163 (428 ms/piece) — 125/150 games, 1.5 positions/s overall
+game 20125: 300 pieces, 142 lines, attack 184 (425 ms/piece) — 126/150 games, 1.5 positions/s overall
+game 20127: 300 pieces, 158 lines, attack 146 (421 ms/piece) — 127/150 games, 1.5 positions/s overall
+game 20126: 300 pieces, 180 lines, attack 170 (525 ms/piece) — 128/150 games, 1.5 positions/s overall
+game 20129: 300 pieces, 165 lines, attack 166 (437 ms/piece) — 129/150 games, 1.6 positions/s overall
+game 20128: 300 pieces, 161 lines, attack 160 (493 ms/piece) — 130/150 games, 1.6 positions/s overall
+game 20134: 73 pieces, 30 lines, attack 20, died (490 ms/piece) — 131/150 games, 1.6 positions/s overall
+game 20133: 108 pieces, 42 lines, attack 42, died (448 ms/piece) — 132/150 games, 1.6 positions/s overall
+game 20130: 300 pieces, 154 lines, attack 108 (498 ms/piece) — 133/150 games, 1.6 positions/s overall
+game 20131: 300 pieces, 150 lines, attack 126 (469 ms/piece) — 134/150 games, 1.6 positions/s overall
+game 20132: 300 pieces, 164 lines, attack 145 (499 ms/piece) — 135/150 games, 1.6 positions/s overall
+game 20137: 193 pieces, 88 lines, attack 84, died (435 ms/piece) — 136/150 games, 1.6 positions/s overall
+game 20136: 300 pieces, 164 lines, attack 168 (424 ms/piece) — 137/150 games, 1.6 positions/s overall
+game 20135: 300 pieces, 156 lines, attack 136 (468 ms/piece) — 138/150 games, 1.6 positions/s overall
+game 20142: 39 pieces, 11 lines, attack 5, died (485 ms/piece) — 139/150 games, 1.6 positions/s overall
+game 20138: 300 pieces, 156 lines, attack 163 (419 ms/piece) — 140/150 games, 1.7 positions/s overall
+game 20139: 300 pieces, 161 lines, attack 162 (417 ms/piece) — 141/150 games, 1.7 positions/s overall
+game 20140: 300 pieces, 158 lines, attack 151 (431 ms/piece) — 142/150 games, 1.7 positions/s overall
+game 20141: 300 pieces, 143 lines, attack 149 (384 ms/piece) — 143/150 games, 1.7 positions/s overall
+game 20145: 156 pieces, 66 lines, attack 50, died (454 ms/piece) — 144/150 games, 1.7 positions/s overall
+game 20143: 300 pieces, 154 lines, attack 139 (405 ms/piece) — 145/150 games, 1.7 positions/s overall
+game 20144: 300 pieces, 154 lines, attack 142 (397 ms/piece) — 146/150 games, 1.7 positions/s overall
+game 20146: 300 pieces, 144 lines, attack 112 (424 ms/piece) — 147/150 games, 1.7 positions/s overall
+game 20147: 300 pieces, 145 lines, attack 133 (351 ms/piece) — 148/150 games, 1.8 positions/s overall
+game 20148: 300 pieces, 157 lines, attack 171 (394 ms/piece) — 149/150 games, 1.8 positions/s overall
+game 20149: 300 pieces, 150 lines, attack 153 (378 ms/piece) — 150/150 games, 1.8 positions/s overall
+
+Done: 150 games, 38298 positions in 21582 s (1.8 positions/s, ~6,388/hour)
+Attack per piece 0.492, deaths 48/150

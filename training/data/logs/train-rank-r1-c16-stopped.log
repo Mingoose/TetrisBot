@@ -1,0 +1,12 @@
+device: mps
+data/runs/net-r1: 185344 decisions, 12870149 candidates, 179646 with labels
+data/runs/net-r1b: 80668 decisions, 5604772 candidates, 78138 with labels
+data/runs/net-r1c: 38148 decisions, 2648471 candidates, 37026 with labels
+274692 training / 29468 validation decisions (scoring 20000), label mean 5.049 std 3.568
+initialised from models/rank_v2_c16.pt
+model: 238,409 params
+before training: val value 0.4375 R² -0.064 rank 1.612 top1 66.5% top3 99.3%
+epoch   1  train value 0.4049 rank 1.523 | val value 0.4110 R² -0.017 rank 1.511 top1 65.1% top3 93.2%  (150s) *
+epoch   2  train value 0.4002 rank 1.505 | val value 0.4251 R² -0.069 rank 1.501 top1 64.9% top3 92.8%  (138s)
+epoch   3  train value 0.3993 rank 1.495 | val value 0.4186 R² -0.049 rank 1.509 top1 64.4% top3 92.9%  (138s)
+epoch   4  train value 0.3952 rank 1.485 | val value 0.4162 R² -0.048 rank 1.495 top1 64.6% top3 92.8%  (140s) *

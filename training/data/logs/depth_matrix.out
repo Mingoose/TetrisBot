@@ -1,0 +1,20 @@
+Warning: Ignoring extra certs from `/Users/etchee/code/MyriadRootCA.pem`, load failed: error:80000002:system library::No such file or directory
+=== @3 10:05
+B = hard
+200 games: A won 98, lost 102, drew 0 → A scores 49.0% ± 6.9 (95%)
+A: attack/piece 0.542, 172 ms/move
+B: attack/piece 0.546, 157 ms/move
+mean game length 214 pieces per bot
+=== @5 10:32
+B = hard
+200 games: A won 115, lost 85, drew 0 → A scores 57.5% ± 6.9 (95%)
+A: attack/piece 0.571, 252 ms/move
+B: attack/piece 0.548, 152 ms/move
+mean game length 187 pieces per bot
+=== @3,2 11:02
+B = hard
+200 games: A won 161, lost 39, drew 0 → A scores 80.5% ± 5.5 (95%)
+A: attack/piece 0.622, 419 ms/move
+B: attack/piece 0.549, 159 ms/move
+mean game length 170 pieces per bot
+=== done 11:42

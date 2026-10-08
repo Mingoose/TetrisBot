@@ -1,0 +1,15 @@
+device: mps
+Traceback (most recent call last):
+  File "/Users/etchee/code/TetrisBot/training/train_value.py", line 171, in <module>
+    main()
+    ~~~~^^
+  File "/Users/etchee/code/TetrisBot/training/train_value.py", line 95, in main
+    boards, ctx, labels, games = load_samples(args.runs, args.horizon, args.gamma, args.death_penalty)
+                                 ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/etchee/code/TetrisBot/training/train_value.py", line 33, in load_samples
+    recs, _ = load_run(d)
+              ~~~~~~~~^^^
+  File "/Users/etchee/code/TetrisBot/training/selfplay_data.py", line 29, in load_run
+    with open(os.path.join(run_dir, 'meta.json')) as f:
+         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: 'data/runs/teacher-v2 data/runs/teacher-v2b/meta.json'

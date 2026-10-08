@@ -1,0 +1,142 @@
+{
+  "config": {
+    "out": "../training/data/runs/teacher-v2b",
+    "games": 3000,
+    "firstGame": 3000,
+    "workers": 8,
+    "pieces": 300,
+    "beam": 32,
+    "depth": 5,
+    "eps": 0.05,
+    "garbageRate": 0.2,
+    "pps": 2,
+    "seed": 2,
+    "weights": ""
+  },
+  "weights": {},
+  "record_size": 69,
+  "fields": [
+    [
+      "game_id",
+      "<u4",
+      1
+    ],
+    [
+      "ply",
+      "<u2",
+      1
+    ],
+    [
+      "board",
+      "<u2",
+      20
+    ],
+    [
+      "active",
+      "u1",
+      1
+    ],
+    [
+      "hold",
+      "u1",
+      1
+    ],
+    [
+      "queue",
+      "u1",
+      5
+    ],
+    [
+      "bag_mask",
+      "u1",
+      1
+    ],
+    [
+      "combo",
+      "i1",
+      1
+    ],
+    [
+      "b2b",
+      "i1",
+      1
+    ],
+    [
+      "incoming",
+      "u1",
+      1
+    ],
+    [
+      "move_rot",
+      "u1",
+      1
+    ],
+    [
+      "move_x",
+      "i1",
+      1
+    ],
+    [
+      "move_y",
+      "i1",
+      1
+    ],
+    [
+      "move_hold",
+      "u1",
+      1
+    ],
+    [
+      "move_random",
+      "u1",
+      1
+    ],
+    [
+      "lines",
+      "u1",
+      1
+    ],
+    [
+      "attack",
+      "u1",
+      1
+    ],
+    [
+      "spin",
+      "u1",
+      1
+    ],
+    [
+      "surge",
+      "u1",
+      1
+    ],
+    [
+      "perfect_clear",
+      "u1",
+      1
+    ],
+    [
+      "garbage_in",
+      "u1",
+      1
+    ],
+    [
+      "terminal",
+      "u1",
+      1
+    ]
+  ],
+  "piece_order": [
+    "I",
+    "O",
+    "T",
+    "S",
+    "Z",
+    "J",
+    "L"
+  ],
+  "started": "2026-10-02T16:12:54.105Z",
+  "finished": null,
+  "totals": null
+}

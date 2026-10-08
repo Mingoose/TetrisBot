@@ -1,255 +1,210 @@
-# Handoff: training the v2 value network on the M1 Max
+# Handoff: the value-net Tetris bot
 
-Written 2026-10-05 for a Claude Code session on the user's M1 Max, continuing
-work started on their M1 MacBook (8 GB, 4 performance cores). Read the root
-`CLAUDE.md` first for the codebase; this file covers where the value-network
-project stands and what to do next.
+Status as of 2026-10-08, written on the M1 Max for the next session (likely on
+the user's other laptop). Read the root `CLAUDE.md` first for the codebase; this
+file covers the value-network project: where it stands, how to pick it up,
+what was tried, and what is left.
 
-## The task right now
+## Where things stand
 
-Train three value networks on the self-play data already on this machine, run
-the T-slot probe, and send the results back to the other Mac. Concretely:
+**The best bot is `rank_v2_c16` with a small search over the visible queue,
+and it is in the app** as the Experimental difficulty
+(`tetris-web/public/models/value_net.{json,bin}`).
 
-1. Get the environment and data in place (checklist below).
-2. Run `training/run_v2.sh` (it checks the setup first, then trains all three
-   models in sequence and shows a macOS notification when done).
-3. Report the results (see "What to report").
+| Bot (200 games vs hard mode, benchmark seed 1) | Result | Attack/piece (bot vs hard) |
+|---|---|---|
+| `rank_v2_c16`, top 3 moves + top 2 replies (`@3,2`, 3 pieces) | **161–39 (80.5%)** | 0.62 vs 0.55 |
+| same, one more ply (`@3,2,2`, 4 pieces) | 168–32 (84%) | 0.69 vs 0.56 |
 
-The user has been hitting setup errors running commands by hand — that is why
-this session exists. Do the setup and launching for them.
+The app uses `findBestMoveTimed` (`src/valueBot.ts`): it deepens `@3` → `@3,2`
+→ `@3,2,2` while a 1.2 s budget allows (the app falls back to another bot at
+2 s). In Chrome on the M1 Max, 102 of 150 moves reached 4 pieces; median
+843 ms, max 1.21 s per move. A slower machine settles at 3 or 2 pieces.
 
-## Setup checklist (all from `training/`)
+Three self-improvement rounds (fine-tuning on data the net bot generated) all
+came out equal or worse, so they were not shipped; see "What was tried".
 
-**Python environment.** `.venv` may not exist yet.
+**Not yet done by anyone:** playing the Experimental difficulty in the real app
+UI. The app needs Supabase credentials (`tetris-web/.env`) and a sign-in, which
+the M1 Max session did not have, so it was tested through a temporary page using
+the same worker and request code. Do this first on a machine with `.env`.
+
+## Picking it up on another machine
+
+Everything needed is in the repo except the candidate files (5 GB, regenerable).
+
 ```bash
-python3 --version          # PyTorch needs >= 3.10; Apple's built-in python3 is 3.9
-python3 -m venv .venv      # or, if 3.9: brew install python@3.12 && python3.12 -m venv .venv
-.venv/bin/pip install --upgrade pip
-.venv/bin/pip install torch numpy
+git pull
+cd training
+python3 --version                      # needs >= 3.10 (Apple's python3 is 3.9: brew install python@3.12)
+python3 -m venv .venv && .venv/bin/pip install --upgrade pip && .venv/bin/pip install torch numpy
 .venv/bin/python -c "import torch; print(torch.__version__, 'MPS:', torch.backends.mps.is_available())"
+.venv/bin/python selfplay_data.py data/runs/*     # summaries of all six runs (see Data below)
+
+cd ../tetris-web && npm install
+npm run harness:typecheck && npx tsc --noEmit -p .
 ```
-If MPS is available, training uses the GPU automatically (`--device auto`).
-On the other Mac (macOS 13) torch 2.11 reported MPS unavailable.
 
-**Data.** Both runs must be in `training/data/runs/` (gitignored, not in the repo):
-- `teacher-v2b/` — generated on this M1 Max (games 3000+, ~2,100 games).
-- `teacher-v2/` — generated on the other Mac (games 0–808, 216,293 positions),
-  sent over by AirDrop as `~/Downloads/teacher-v2.zip`. If not yet unpacked:
-  `unzip ~/Downloads/teacher-v2.zip -d data/runs/`
-- Verify: `ls data/runs/*/meta.json` lists both, and
-  `.venv/bin/python selfplay_data.py data/runs/teacher-v2 data/runs/teacher-v2b`
-  shows ~809 and ~2,100 games with the `spins … full / … mini` summary line.
-  Game ids must not overlap (0–808 vs 3000+).
-
-Make sure no self-play run is still writing to `teacher-v2b`
-(`pgrep -fl selfplay.mjs` should print nothing; stop with `pkill -f selfplay.mjs`).
-
-**Launch.**
+Regenerate what is not committed, only when needed:
 ```bash
-nohup caffeinate -i ./run_v2.sh > data/logs/run_v2.out 2>&1 &
-tail -f data/logs/run_v2.out            # step start/done lines
-tail -f data/logs/train-v2.log          # per-epoch progress of the current model
+# Candidate files for train_rank.py (~5 GB total, ~5 min): one per run you train on
+for r in teacher-v2 teacher-v2b vs-r2; do npm run candidates -- ../training/data/runs/$r; done
+# TypeScript test exports (weights + 1000 check positions) for duels / valuecheck
+cd ../training && .venv/bin/python export_value_ts.py models/rank_v2_c16.pt \
+    --out models/rank_v2_c16.json data/runs/teacher-v2 data/runs/teacher-v2b
+cd ../tetris-web && npm run valuecheck -- ../training/models/rank_v2_c16.json   # expect max error ~2e-6
 ```
-Overrides: `DEVICE=cpu ./run_v2.sh` if MPS errors; `THREADS=8` default;
-`EXTRA="--epochs 1"` for a quick smoke test (used to verify the script).
 
-Expected time (estimates, not measured on this machine): ~780K training samples.
-CPU with 8 threads ≈ 2 min/epoch for the 32-channel model, 12–18 epochs with
-early stopping → whole script ~1–1¼ h. With MPS maybe 25–40 min. Multiply the
-first epoch's `(Ns)` by ~15 for a real estimate.
+Quick sanity check that everything works (≈5 min on 8 cores):
+`npm run duel -- --a net:../training/models/rank_v2_c16.json@3,2 --b hard --games 20`
+should win roughly 16 of 20.
+
+## The pipeline (commands)
+
+All TypeScript tools run from `tetris-web/`, Python from `training/`.
+
+| Step | Command | Notes |
+|---|---|---|
+| Self-play data | `npm run harness -- --out ../training/data/runs/NAME --games N [--net FILE.json@3,2]` | hard bot teacher by default; `--net` = value-net teacher |
+| Versus data | `npm run duel -- --a net:FILE.json@3,2 --b hard --games N --seed S --record ../training/data/runs/NAME` | records both sides + side file (ready garbage, search scores) |
+| Candidates | `npm run candidates -- RUN_DIR` | every placement of every decision; needed by `train_rank.py` |
+| Value-only training | `train_value.py RUNS --channels 16 --out models/X.pt` | the original v2 nets |
+| Ranking training | `train_rank.py RUNS --channels 16 [--init CKPT] --out models/X.pt` | see options below |
+| Export for TS tools | `export_value_ts.py CKPT --out models/X.json RUNS` | weights + check positions |
+| Export for the app | `export_value_ts.py CKPT --app ../tetris-web/public/models` | compact `value_net.{json,bin}` |
+| Check TS = PyTorch | `npm run valuecheck -- models/X.json [--deep]` | also teacher agreement and speed |
+| 1v1 | `npm run duel -- --a SPEC --b SPEC --games 200 --out FILE.jsonl` | specs: `hard`, `hard:W:D`, `net:FILE.json[@K,K2,…]` |
+
+`train_rank.py` options that matter: `--rank-weight` (teacher-target loss),
+`--soft-weight`/`--soft-temp` (targets from the net's own search, for runs made
+with `duel --record`), `--anchor-fraction` (share of each epoch from
+teacher-target runs), `--lr` (use 3e-4 when fine-tuning), `--patience 0` (no early
+stop; best and `.last.pt` are both saved), `--death-penalty`. With `--init` the
+starting checkpoint's label mean/std are kept (recomputing them silently rescales
+the value against the attack term; that hurt round 1).
+
+**Judging a new net:** always by duels, never by validation loss. Gate it head to
+head against `rank_v2_c16@3,2` (200 games; needs ≳55%), then 200 games vs hard
+on seed 1 and compare game by game with `data/duels/depth-3-2-vs-hard.jsonl`
+(paired sign test). Train on seeds other than 1.
+
+## Data in the repo
+
+`training/data/runs/*/` holds the raw records (`w*.bin`), side files (`s*.bin`,
+versus runs only) and `meta.json`. Candidate files (`cand*.bin`,
+`candidates.json`) and `models/*.json` are gitignored and regenerable.
+
+| Run | Games | Positions | Teacher / source | Seed, game ids |
+|---|---|---|---|---|
+| `teacher-v2` | 809 | 216K | hard W32 D5, 5% random drops, 0.2 garbage/piece | 1, ids 0–808 (other Mac) |
+| `teacher-v2b` | 2,167 | 581K | same | 1, ids 3000+ |
+| `net-r1` | 700 | 186K | `rank_v2_c16@3,2` self-play | 7, ids 0–699 |
+| `net-r1b` | 300 | 81K | same | 7, ids 10000+ |
+| `net-r1c` | 150 | 38K | same | 7, ids 20000+ |
+| `vs-r2` | 800 duels | 275K (both sides) | `rank_v2_c16@3,2` vs hard, real garbage | 11; game id = 2 × duel + board |
+
+Not on the M1 Max (may still be on the other laptop): `teacher-v1` (old
+JStris-style rules, pipeline testing only, never mix) and
+`obsolete-teacher-v2-srs-oldgarbage` (pre-SRS+/garbage fix, don't use).
+Known teacher quirk: the hard bot's search sees the true order of the remaining
+bag; records store only the set.
+
+Models (`training/models/*.pt`, ~1 MB each): `value_v2*` (value-only),
+`rank_v2_c16` (**best**), `rank025_v2_c16`, `rank_r1_c16`, `rank_r2_c16`,
+`surv_c16` (+ `.last.pt` variants). Logs in `data/logs/`, every duel's per-game
+results in `data/duels/*.jsonl`.
+
+## What was tried (results history)
+
+**1. Value-only net (v2).** Labels: discounted attack over the next 12 pieces
+(γ 0.97), −10 if the bot dies in that window. Val R² 0.313 (32 ch), 0.311
+(16 ch), 0.297 (half data); context shuffle drops R² to ~0.21, so it uses the
+queue. 1-ply bot vs hard: **0–100**. It only ever saw boards the teacher chose,
+so the search over ~70 candidates found boards it misjudged (it rated hole-ridden
+boards ~8).
+
+**2. Ranking loss** (`train_rank.py`): softmax over every candidate's
+attack + value, target = the teacher's move, plus the value loss. Teacher
+agreement 17% → 36% (top 3: 36% → 66%); value R² fell to ~0 (the ranking loss
+only constrains differences within a position). 1-ply: 98–2 vs the 1-ply
+heuristic, 12–88 vs hard. `--rank-weight 0.25` gave R² 0.18 and played the same.
+
+**3. Search over the visible queue** (`findBestMoveDeep`, 200 games vs hard):
+`@3` 98–102, `@5` 115–85, **`@3,2` 161–39**, `@3,2,2` 168–32. The third piece
+matters far more than width; the fourth is not significantly better
+(paired 30 vs 23, p ≈ 0.41).
+
+**4. Speed.** TS inference (`src/valueNet.ts`): skips rows above the stack
+(cached empty-board activations and first-dense-layer sums), sliding-window
+convolution over 4 output channels × 4 cells: 2.6 ms → 0.36 ms per board in Node,
+identical outputs. The net is ~99% of search time; move generation ~5 µs per
+candidate.
+
+**5. Self-improvement rounds — all failed the gate:**
+
+| Round | Data | Targets | vs rank_v2 (gate) | vs hard |
+|---|---|---|---|---|
+| r1 `rank_r1_c16` | net self-play, 305K | search's pick (hard), new data only, lr 1e-3 | — | 136–64 / 128–72 (worse, p < 0.01) |
+| r2 `rank_r2_c16` | versus vs hard, 275K + teacher anchor 50% | soft targets from own search; lr 3e-4 | 100–100 | 150–50 (p ≈ 0.24) |
+| r3 `surv_c16` | same as r2 | no search targets, death penalty 30 | 88–111 | 155–45 (p ≈ 0.56) |
+
+Rounds 1–2 made the net more aggressive (attack/piece 0.68–0.73 vs 0.62) without
+winning more; round 3 lowered aggression (0.65) and still didn't win more, so
+"too aggressive" is not the explanation. Every large gain came from a structural
+change (ranking loss, queue search), not from more training on the bot's own
+games. On this hardware a round costs 3–5 h, too few rounds for an
+AlphaZero-style loop to pay off.
+
+## What is left (in rough order of value)
+
+1. **Play the Experimental difficulty in the app** (needs `.env` + sign-in):
+   menu enables once the net loads; check versus, watch and bot-vs-bot modes.
+2. **Slower devices:** if the bot should be strong on older laptops/phones, split
+   the search's independent branches across a few workers (~2–3× wall-clock on
+   the deep plies), or WebAssembly SIMD for the convolution (~2–3× per board,
+   bigger job). Not worth it for this machine (4-piece search mostly fits).
+3. **Training, if resumed:** the one untested idea is win/loss value labels from
+   the versus games (does this side eventually win?); ~30 min training + 1 h
+   duels with the existing `vs-r2` data. Expect a similar outcome to r2/r3.
+4. Housekeeping: `run_v2.sh` and `train_value.py` still default to the v2
+   setup; fine as they are.
 
 ## Pitfalls already hit
 
-- **zsh doesn't word-split `$VAR`.** `R="a b"; cmd $R` passes one argument in
-  zsh (macOS default shell). Write paths out or use a `sh` script (run_v2.sh does).
-- **"meta.json does not exist"** = a run folder path is wrong (usually the above).
-- **"no such file models/value_v2.pt"** = training failed earlier; read
-  `data/logs/train-v2.log`, not the probe error.
-- `source .venv/bin/activate` only lasts for that terminal; run_v2.sh calls
-  `.venv/bin/python` directly so activation doesn't matter.
+- **Lid closed = everything pauses.** `caffeinate -i` prevents idle sleep only;
+  closing the lid still sleeps the Mac. Long runs survive (they resume), but
+  per-piece timings in logs spanning a sleep are meaningless.
+- **zsh doesn't word-split `$VAR`** (`R="a b"; cmd $R` passes one argument).
+  Write paths out or use `sh`.
+- **`pkill -f PATTERN` can match its own shell** when the pattern appears in the
+  same command line; it killed a wrapper once. Prefer PIDs.
+- **Chrome throttles timers in hidden tabs**; benchmark pages must not yield via
+  `setTimeout` (Web Workers are not throttled).
+- **Duels under CPU load:** ms/move in duel logs is with all cores busy; measure
+  speed separately (valuecheck, or the browser).
+- `source .venv/bin/activate` only lasts for that terminal; call
+  `.venv/bin/python` directly.
 
-## What the three models test
-
-| Model | Command difference | Question it answers |
-|---|---|---|
-| `value_v2` | — (32 channels, all data) | The main model |
-| `value_v2_half` | `--train-fraction 0.5` | Would more data help? Same validation games as `value_v2` |
-| `value_v2_c16` | `--channels 16` | Is a ~4× cheaper model (for in-browser inference) nearly as good? |
-
-## What to report
-
-From each `data/logs/train-v2*.log`: best epoch, final `val loss`, `R²`, and
-the context-shuffled R² (last 3 lines). From `probe-v2*.txt`: the table.
-Then zip results for the other Mac:
-```bash
-zip -r ~/Downloads/v2-results.zip data/logs models/value_v2*.pt
-```
-
-How to read them:
-- **Full vs half:** if full-data R² is clearly higher than half-data, the model
-  is data-limited → generating more self-play data is worth it. If similar,
-  the bottleneck is labels or architecture.
-- **32 vs 16 channels:** if R² is within ~0.01, prefer 16 channels for the
-  browser.
-- **Context shuffle:** R² dropping noticeably when the piece context is
-  shuffled means the net uses the queue. The previous model (old rules, 190K
-  samples) went 0.189 → 0.120.
-- **T-slot probe:** the slot board should beat the flat board most when a T is
-  close (next / hold) and least when no T comes until the next bag. Previous
-  model: +0.93 (T in hold) … +0.60 (no T until next bag) — right direction, too
-  timid.
-
-## 1v1 results (2026-10-05, M1 Max)
-
-v2 trained (val R² 0.313 full / 0.297 half / 0.311 c16). Exported with
-`export_value_ts.py`, ported to TS (`src/valueNet.ts`, `src/valueBot.ts`);
-`npm run valuecheck` matches PyTorch to 2e-6 with identical boards/contexts on
-1,000 validation positions. Duels (`npm run duel`, 2 pps both sides):
-
-| A vs B | Result | Attack/piece A vs B |
-|---|---|---|
-| net c16 1-ply vs hard | 0–100 | 0.22 vs 0.39 |
-| net 32ch 1-ply vs hard | 3–47 | 0.23 vs 0.38 |
-| hard heuristic 1-ply (hard:1:1) vs hard | 1–49 | 0.17 vs 0.39 |
-| net c16 1-ply vs hard:1:1 | 15–35 | 0.23 vs 0.15 |
-
-The net bot attacks more than the 1-ply heuristic but tops out sooner. Watching
-it play solo: it builds boards full of holes and rates them highly (~8). It
-only ever trained on afterstates the teacher chose, so 1-ply argmax over ~70
-candidates finds its blind spots. It picks the teacher's move 17.5% of the time
-(the 1-ply heuristic: 29.3%). Fix candidates: train on the other candidates too
-(a ranking loss over each position's placements, target = teacher's move), and/or
-label states the net bot itself visits.
-
-### Ranking loss (step 1 of the fix)
-
-`npm run candidates -- RUN_DIR` (tetris-web/) writes every placement of every
-recorded decision (~69 each, 55M total for v2+v2b, ~3 GB, `cand*.bin` in the
-run dir). `train_rank.py` adds a softmax loss over attack + value with the
-teacher's move as target (`--rank-weight 1`, `--temp 1`), starting from
-`value_v2_c16.pt`: 12 epochs × 200K decisions, ~2¼ min each on MPS.
-Log: `data/logs/train-rank-c16.log`; model `models/rank_v2_c16.pt`.
-
-- Teacher agreement 17.0% → 35.7% (top 3: 36% → 66%). Value R² fell to ~−0.05:
-  the output now only ranks, it no longer predicts attack on its own.
-- vs hard:1:1 (1-ply heuristic): **98–2** (old net 15–35).
-- vs hard: **12–88** (old net 0–100); games 154 pieces (was 32), attack/piece 0.39 vs 0.50.
-
-### Selective deepening (top K re-searched one piece deeper)
-
-`findBestMoveDeep` in `valueBot.ts`; duel spec `net:FILE.json@K`. The top K
-1-ply moves are re-scored as attack + best (attack + value) with the next,
-visible piece. Same seeds as the 1-ply duels:
-
-| Net, search | vs hard | Attack/piece (net vs hard) | Game length | ms/move |
-|---|---|---|---|---|
-| rank_v2_c16, 1-ply | 12–88 | 0.39 vs 0.50 | 154 | ~210 |
-| rank_v2_c16, K=3 | **51–49** | 0.54 vs 0.54 | 224 | ~850 |
-| rank025_v2_c16, K=3 | **54–46** | 0.59 vs 0.53 | 115 | ~870 |
-
-`rank025` = `--rank-weight 0.25` (val R² 0.18, teacher agreement 34.1%). The two
-K=3 results are within noise of each other (paired games: 22 won only by
-rank 1.0, 25 only by 0.25); the 0.25 net attacks more and ends games faster.
-ms/move is Node with 8–9 duel workers sharing the CPU.
-
-### Faster net and deeper search (2026-10-06)
-
-`valueNet.ts` now skips rows above the stack (their activations equal an
-empty board's, cached per layer, with precomputed first-dense-layer sums) and
-register-blocks the convolutions: 2.6 ms → 0.45 ms per board (c16), still
-within 2.5e-6 of PyTorch. Duel spec widths are per ply: `@3,2` = top 3 moves,
-then the top 2 replies of each scored with a third piece. rank_v2_c16 vs hard,
-200 games, same seeds (data/duels/depth-*-vs-hard.jsonl):
-
-| Search | vs hard | Attack/piece (net vs hard) | Length | ms/move |
-|---|---|---|---|---|
-| `@3` | 98–102 (49%) | 0.542 vs 0.546 | 214 | 172 |
-| `@5` | 115–85 (57.5%) | 0.571 vs 0.548 | 187 | 252 |
-| `@3,2` | **161–39 (80.5%)** | 0.622 vs 0.549 | 170 | 419 |
-
-Paired games: `@3,2` beats `@3` (84 vs 21 games won only by one, p < 0.0001)
-and `@5` (68 vs 22, p < 0.0001); `@5` vs `@3` is 57 vs 40 (p ≈ 0.10).
-The third ply matters more than a wider second ply.
-
-A fourth ply, `@3,2,2`: **168–32 (84%)**, attack/piece 0.686 vs 0.560, ~970
-ms/move (shared CPU). Not significantly better than `@3,2` on the same games
-(30 vs 23 won only by one, p ≈ 0.41) for ~2.4× the time: `@3,2` is the
-sweet spot for now.
-
-### Self-improvement rounds (both failed the gate; app keeps rank_v2_c16@3,2)
-
-All duels: @3,2, 200 games, benchmark seed 1 (training data used other seeds).
-
-**Round 1** (`rank_r1_c16`): self-play `net-r1/r1b/r1c` (305K positions, teacher
-`rank_v2_c16@3,2`, random garbage); hard targets = the search's pick; new data
-only; lr 1e-3. vs hard: 136–64 (epoch 4) / 128–72 (epoch 30), both significantly
-worse than rank_v2's 161–39. Likely causes: targets only reorder the old net's
-top 3 (teacher-in-top-3 fell 99% → 91%), no anchor data, and the label scaling
-was recomputed on the new data (stretched V by ~18% vs attack; fixed since).
-
-**Round 2** (`rank_r2_c16`): `duel.ts --record` games vs hard (`vs-r2`, 800
-games, seed 11, 275K positions); net side trained toward its own search's soft
-scores over the expanded moves, hard side value-only; `teacher-v2/v2b` as a 50%
-anchor; lr 3e-4, 12 epochs, init scaling kept. Search agreement 65.9% → 68.1%,
-anchor top-3 held (65.5%). Gate vs rank_v2: **100–100** (fails, needs ~55%).
-vs hard: 150–50 vs rank_v2's 161–39 (paired 30 vs 41, p ≈ 0.24).
-
-Pattern in both rounds: the new nets attack more (0.68–0.73 attack/piece vs
-0.62) but do not win more. Working hypothesis: the search scores lines mostly
-by attack and the label (12-piece attack, −10 on death) underprices risk, so
-distilling the search makes the net more aggressive than winning rewards.
-
-**Round 3, survival-weighted** (`surv_c16`): same data and settings as round 2
-but no search targets (`--soft-weight 0`) and `--death-penalty 30`. Attack/piece
-vs hard 0.65 (between rank_v2's 0.62 and round 2's 0.68). Gate vs rank_v2:
-**88–111–1** (fails, p ≈ 0.12); vs hard 155–45 (paired 34 vs 40, p ≈ 0.56).
-So the aggression hypothesis is not supported: lowering it didn't win more.
-
-Three fine-tunes of rank_v2 on net-generated data (self-play or versus), with
-three different targets, all came out equal or worse. rank_v2_c16@3,2 remains
-the best bot. Untested: win/loss value labels from the versus games.
 ## Project background
 
 **Goal.** A Tetris bot whose network judges a board *together with the upcoming
-pieces*, so it can search shallowly (1 ply, ~70 evaluations per move) instead
-of the hard bot's deep beam search (width 32, depth 5). The user's framing:
-"if I create the overhang and I have a T in the next few pieces then I should
-be fine — I don't need to compute the moves in between."
+pieces*, so it needs only a shallow search instead of the hard bot's deep beam
+search (width 32, depth 5). The user's framing: "if I create the overhang and I
+have a T in the next few pieces then I should be fine — I don't need to compute
+the moves in between." Outcome: the net replaces most of the depth; a 2–3 ply
+search over the *visible* queue (no guessing) does the rest.
 
-**Plan.**
-1. ✅ Node self-play harness running the real `ai.ts` (`tetris-web/harness/`).
-2. ✅ Teacher data from the hard bot under TETR.IO rules (`teacher-v2`, `teacher-v2b`).
-3. ⏳ Train the value net (this step). Labels: discounted attack over the next
-   12 pieces, −10 if the bot dies in that window (`training/value_data.py`).
-4. Build the experimental difficulty as 1-ply search scored by the net, in the
-   browser (hand-written TS inference or a smaller model), within the 2 s
-   bot-move timeout.
-5. Play it against hard mode (bot-vs-bot); later, self-improvement rounds where
-   the net bot generates its own data.
-
-**Why the original CNN failed** (it is still in `cnnEvaluator.ts`): inference was
-numerically correct but TF.js CPU took ~13 ms/board (20–40 s per move); its
-labels were 93% identical; it never saw the queue or hold.
-
-**Rules.** The game targets TETR.IO multiplayer: All-Mini+ spins, multiplier
-combos, B2B level with surge, SRS+ kicks, garbage cap 8 / 20-frame travel /
-lands only on non-clearing locks. All in `tetris-web/src/rules.ts` and
-`versus.ts`; `npm run test:rules` verifies against Triangle.js.
-
-**Data provenance.**
-- `teacher-v2`, `teacher-v2b`: current rules — use these.
-- `teacher-v1`: old JStris-style rules — pipeline testing only, never mix.
-- `obsolete-teacher-v2-srs-oldgarbage`: pre-SRS+/garbage fix — don't use.
-- Known teacher quirk: the bot's search sees the true order of the remaining
-  bag, slightly more than a player knows; recorded data stores only the set.
+**Rules.** TETR.IO multiplayer: All-Mini+ spins, multiplier combos, B2B level
+with surge, SRS+ kicks, garbage cap 8 / 20-frame travel / lands only on
+non-clearing locks. All in `tetris-web/src/rules.ts` and `versus.ts`;
+`npm run test:rules` verifies against Triangle.js.
 
 **User decisions to respect.**
-- Do **not** propose tuning the hard bot's weights with an optimiser (CMA-ES);
-  the user decided to use the current hard bot as the teacher.
-- The CNN should replace search depth, not sit beside a deep search.
+- Do **not** propose tuning the hard bot's weights with an optimiser (CMA-ES).
+- The net should replace search depth, not sit beside a deep search (a small
+  search over the visible queue was agreed).
+- The hard bot is a benchmark, not a teacher to imitate further: the user wants
+  a bot on the frontier, not a copy of hard mode.
 - AI style preferences: favour T-spin setups and B2B over single-line clears;
   don't penalise interior wells.
 - The user is the only developer; commit straight to `main`, no PRs.
-
-**Throughput reference.** Hard teacher: ~190 ms/piece per core on the M1;
-data generation ~90K positions/hour on 4 cores there.

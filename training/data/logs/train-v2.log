@@ -1,0 +1,20 @@
+device: mps
+data/runs/teacher-v2: 216293 records → 208587 samples
+data/runs/teacher-v2b: 581158 records → 560258 samples
+768845 samples, label mean 4.234 std 3.018, 1.0% include a death
+train 693065 / val 75780 samples (2679 / 297 games)
+model: 252,553 params, 4,028,352 MACs/board
+epoch   1  train 0.2948  val 0.2797  R² 0.283  (17s) *
+epoch   2  train 0.2723  val 0.2738  R² 0.304  (16s) *
+epoch   3  train 0.2663  val 0.2703  R² 0.312  (16s) *
+epoch   4  train 0.2612  val 0.2693  R² 0.315  (16s) *
+epoch   5  train 0.2569  val 0.2689  R² 0.313  (16s) *
+epoch   6  train 0.2525  val 0.2739  R² 0.299  (16s)
+epoch   7  train 0.2481  val 0.2727  R² 0.295  (16s)
+epoch   8  train 0.2438  val 0.2741  R² 0.294  (16s)
+epoch   9  train 0.2394  val 0.2734  R² 0.293  (16s)
+no improvement for 4 epochs; stopping
+
+best checkpoint → models/value_v2.pt
+  val loss 0.2689, R² 0.313
+  with piece context shuffled: loss 0.3087, R² 0.209 (bigger drop = net relies more on upcoming pieces)

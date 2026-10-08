@@ -1,4 +1,10 @@
-data/
-models/
+# Raw self-play / versus records, checkpoints, logs and duel results are tracked.
+# These are large and regenerable:
+data/runs/*/cand.bin
+data/runs/*/cand_pos.bin
+data/runs/*/candidates.json
+models/*.json
+# Stray copies of value_v2*.pt saved with the wrong extension
+models/*.py
 __pycache__/
 *.pyc
