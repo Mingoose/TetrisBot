@@ -46,8 +46,12 @@ interface SavedAI { id: string; name: string; code: string; }
 
 let savedAIs: SavedAI[] = [];
 
+// Menus open with the list already in memory (fetched after sign-in) and call
+// this to refresh it in the background. getSession() reads the local session
+// without a network round trip; row-level security still checks the token.
 async function loadSavedAIs(): Promise<void> {
-  const { data: { user } } = await supabase.auth.getUser();
+  const { data: { session } } = await supabase.auth.getSession();
+  const user = session?.user;
   if (!user) { savedAIs = []; return; }
   const { data } = await supabase
     .from('user_ais')
@@ -688,6 +692,7 @@ function openAiPicker(title: string, current: AiSelection, onSelect: (sel: AiSel
   renderAiPickerList(current);
   document.getElementById('ai-picker')!.style.display = 'flex';
   canvas.blur();
+  loadSavedAIs().then(() => { if (aiPickerCallback === onSelect) renderAiPickerList(current); });
 }
 
 function closeAiPicker(): void {
@@ -775,9 +780,11 @@ function renderAiPickerList(current: AiSelection): void {
 // ---- BvB setup overlay ----
 
 function openBvbSetup(): void {
+  const overlay = document.getElementById('bvb-setup')!;
   renderBvbSetup();
-  document.getElementById('bvb-setup')!.style.display = 'flex';
+  overlay.style.display = 'flex';
   canvas.blur();
+  loadSavedAIs().then(() => { if (overlay.style.display !== 'none') renderBvbSetup(); });
 }
 
 function closeBvbSetup(): void {
@@ -860,12 +867,12 @@ function renderAiList(): void {
   });
 }
 
-async function openAiManager(): Promise<void> {
-  await loadSavedAIs();
-  renderAiList();
+function openAiManager(): void {
   const overlay = document.getElementById('ai-manager')!;
+  renderAiList();
   overlay.style.display = 'flex';
   canvas.blur();
+  loadSavedAIs().then(() => { if (overlay.style.display !== 'none') renderAiList(); });
 }
 
 function closeAiManager(): void {
@@ -963,15 +970,15 @@ canvas.addEventListener('click', (e) => {
   }
 
   if (hit(MENU_BVB_BTN) && isAdmin) {
-    loadSavedAIs().then(() => openBvbSetup());
+    openBvbSetup();
     return;
   }
 
   if (hit(MENU_WATCH_BTN) && isAdmin) {
-    loadSavedAIs().then(() => openAiPicker('WATCH AI', watchAiSel, (sel) => {
+    openAiPicker('WATCH AI', watchAiSel, (sel) => {
       watchAiSel = sel;
       startWatchGame();
-    }));
+    });
     return;
   }
 
@@ -979,10 +986,10 @@ canvas.addEventListener('click', (e) => {
   if (hit(MENU_SPRINT_BTN))   variant = 'sprint';
   if (hit(MENU_CREATIVE_BTN)) variant = 'creative';
   if (hit(MENU_VERSUS_BTN)) {
-    loadSavedAIs().then(() => openAiPicker('VERSUS AI', versusAiSel, (sel) => {
+    openAiPicker('VERSUS AI', versusAiSel, (sel) => {
       versusAiSel = sel;
       startVersusGame();
-    }));
+    });
     return;
   }
   if (!variant) return;
@@ -1008,6 +1015,7 @@ async function startGame(userId: string): Promise<void> {
   ]);
   settings = loaded;
   isAdmin = profileResult.data?.is_admin ?? false;
+  loadSavedAIs(); // prefetch so the AI menus open instantly
 
     setupSettingsUI(
       state,
