@@ -1,8 +1,8 @@
 import { ActivePiece, CellValue, PieceType } from './types';
 import { Bag } from './bag';
 import {
-  emptyBoard, collides, lockPiece, clearLines, isGameOver, hardDropY,
-  addGarbageLines, BOARD_COLS,
+  emptyBoard, collides, lockPiece, clearLines, hardDropY,
+  addGarbageLines, isLockOut, spawnOrBlockOut, visibleRows, BOARD_COLS, SPAWN_Y,
 } from './board';
 import { setLockHook, spawnPiece, NEXT_QUEUE_SIZE } from './game';
 import { SpinKind, RULES, resolveClear } from './rules';
@@ -239,9 +239,9 @@ export function handleLock(
 
 export function setupPlayerLockHook(data: VersusData): void {
   setLockHook((state, linesCleared, _landedPiece, spin) => {
+    // Landed garbage can't top the player out by itself: it pushes the stack
+    // into the buffer, and the next spawn decides (game.ts block out).
     state.board = handleLock(data.playerCombat, data.botCombat, state.board, linesCleared, spin, performance.now()).board;
-    // Check if post-garbage board triggers game over (board overflow)
-    if (isGameOver(state.board)) state.mode = 'gameover';
   });
 }
 
@@ -263,6 +263,13 @@ export function botBagMask(bot: BotBoard): number {
   return mask;
 }
 
+// What the AIs see of a bot: its visible rows only (the searches, the value net
+// and uploaded AIs all work on a 20-row board). Moves come back in the same
+// coordinates, since row 0 is the top visible row either way.
+function aiView(bot: BotBoard): BotBoard {
+  return { ...bot, board: visibleRows(bot.board) };
+}
+
 // Send bot state to the AI worker for async move computation.
 // The value-net bot (aiParams.valueNet = search widths) gets the full search
 // position instead, built here because garbage readiness uses this thread's clock.
@@ -277,7 +284,7 @@ export function requestBotMove(
   if (aiParams?.valueNet) {
     worker.postMessage({
       valueNet: aiParams.valueNet, searchMs: aiParams.searchMs ?? 1000,
-      state: searchStateFor(bot, combat, botBagMask(bot), performance.now()),
+      state: searchStateFor(aiView(bot), combat, botBagMask(bot), performance.now()),
     });
     return;
   }
@@ -288,9 +295,9 @@ export function requestBotMove(
     // Pass a slice as bagState so the beam search looks ahead into the same
     // pieces both bots will actually receive.
     const bagState = bvbLookahead(bot, WORKER_LOOKAHEAD);
-    worker.postMessage({ bot: { ...bot, bagState }, pendingGarbage, combo, b2b, b2bActive, ...aiParams });
+    worker.postMessage({ bot: { ...aiView(bot), bagState }, pendingGarbage, combo, b2b, b2bActive, ...aiParams });
   } else {
-    worker.postMessage({ bot, pendingGarbage, combo, b2b, b2bActive, ...aiParams });
+    worker.postMessage({ bot: aiView(bot), pendingGarbage, combo, b2b, b2bActive, ...aiParams });
   }
 }
 
@@ -349,7 +356,7 @@ export function applyBotMove(
     invalidReason = 'floating';
   }
   if (invalidReason) {
-    piece.y = hardDropY(bot.board, { ...piece, y: 0 });
+    piece.y = hardDropY(bot.board, { ...piece, y: SPAWN_Y });
   }
 
   // Bots send only a final position; credit the best spin a rotation into it can earn.
@@ -366,16 +373,19 @@ export function applyBotMove(
   bot.board = lock.board;
   onLock?.(lock.outcome);
 
-  // Spawn next piece
+  if (isLockOut(piece, linesCleared)) {
+    bot.dead = true;
+    return invalidReason;
+  }
+
+  // Spawn next piece; block out if it has nowhere to appear (left overlapping)
   if (!useBvb) botBag.restoreState(bot.bagState);
   const nextType = bot.nextQueue.shift()!;
   bot.nextQueue.push(drawNext());
-  bot.active = spawnPiece(nextType);
+  const spawned = spawnOrBlockOut(bot.board, nextType, linesCleared > 0);
+  bot.active = spawned ?? spawnPiece(nextType);
   bot.holdUsed = false;
-
-  if (isGameOver(bot.board) || collides(bot.board, bot.active, 0, 0)) {
-    bot.dead = true;
-  }
+  if (!spawned) bot.dead = true;
 
   return invalidReason;
 }

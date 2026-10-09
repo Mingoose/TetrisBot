@@ -4,8 +4,8 @@ import { getReplayFrameIndex, getVersusReplayFrameIndex } from './replay';
 import type { ClassificationResult } from './moveQuality';
 import { qualityColor, qualityLabel } from './moveQuality';
 import { PIECE_COLORS, getRotation } from './pieces';
-import { hardDropY, BOARD_COLS, BOARD_ROWS } from './board';
-import { CELL_SIZE, BOARD_OFFSET_X, BOARD_OFFSET_Y } from './editor';
+import { hardDropY, collides, bufferOf, spawnPosition, BOARD_COLS, BOARD_ROWS } from './board';
+import { CELL_SIZE, BOARD_OFFSET_X, BOARD_OFFSET_Y, ROWS_ABOVE } from './editor';
 import { VersusData, BotBoard, BotVsBotData } from './versus';
 import { MAX_HISTORY } from './rewind';
 import { KeyBindings, DEFAULT_KEYBINDINGS, keyLabel } from './settings';
@@ -24,7 +24,7 @@ const HOLD_Y = BOARD_OFFSET_Y + 30;
 const NEXT_X = BOARD_OFFSET_X + BOARD_W + 10;
 const NEXT_Y = BOARD_OFFSET_Y;
 export const CANVAS_W = BOARD_OFFSET_X + BOARD_W + 120;
-export const CANVAS_H = BOARD_H + BOARD_OFFSET_Y * 2;
+export const CANVAS_H = BOARD_H + BOARD_OFFSET_Y + 20;
 
 // Versus layout: bot board drawn to the right of the existing solo layout
 const BOT_CELL_SIZE = 20;
@@ -244,18 +244,50 @@ function drawGrid(
   }
 }
 
+// Locked cells of the visible field and of the buffer rows shown above it.
 function drawLockedCells(
   ctx: CanvasRenderingContext2D,
   board: CellValue[][],
   bx: number, by: number,
   cellSize: number,
 ): void {
-  for (let r = 0; r < BOARD_ROWS; r++) {
+  const off = bufferOf(board);
+  for (let r = Math.max(-ROWS_ABOVE, -off); r < BOARD_ROWS; r++) {
     for (let c = 0; c < BOARD_COLS; c++) {
-      const cell = board[r][c];
+      const cell = board[r + off][c];
       if (cell !== 0) drawCell(ctx, bx + c * cellSize, by + r * cellSize, cellSize, cellColor(cell));
     }
   }
+}
+
+// TETR.IO-style danger warning: once the stack is within DANGER_ROWS of the
+// top, outline where the next piece will appear (red where it is blocked, which
+// means a block out on the next lock unless it clears a line) and turn the
+// border red. Returns the border colour to use.
+const DANGER_ROWS = 4;
+function drawDanger(
+  ctx: CanvasRenderingContext2D,
+  board: CellValue[][],
+  next: PieceType | undefined,
+  bx: number, by: number,
+  cellSize: number,
+): string | undefined {
+  const off = bufferOf(board);
+  let danger = false;
+  for (let r = 0; r < off + DANGER_ROWS && !danger; r++) danger = board[r].some(c => c !== 0);
+  if (!danger || !next) return undefined;
+  const piece = spawnPosition(next);
+  const blocked = collides(board, piece, 0, 0);
+  const rot = getRotation(piece.type, 0);
+  ctx.strokeStyle = blocked ? '#ff3344' : '#ff9944';
+  ctx.lineWidth = 2;
+  for (let r = 0; r < rot.length; r++) {
+    for (let c = 0; c < rot[r].length; c++) {
+      if (!rot[r][c]) continue;
+      ctx.strokeRect(bx + (piece.x + c) * cellSize + 2, by + (piece.y + r) * cellSize + 2, cellSize - 4, cellSize - 4);
+    }
+  }
+  return '#ff3344';
 }
 
 // Draws ghost (alpha 0.3) then active piece for any board at arbitrary offset/cell size.
@@ -273,7 +305,7 @@ function drawActivePiece(
     for (let c = 0; c < rot[r].length; c++) {
       if (!rot[r][c]) continue;
       const row = ghostY + r; const col = active.x + c;
-      if (row >= 0 && row < BOARD_ROWS && col >= 0 && col < BOARD_COLS)
+      if (row >= -ROWS_ABOVE && row < BOARD_ROWS && col >= 0 && col < BOARD_COLS)
         drawCell(ctx, bx + col * cellSize, by + row * cellSize, cellSize, color, 0.3);
     }
   }
@@ -281,16 +313,20 @@ function drawActivePiece(
     for (let c = 0; c < rot[r].length; c++) {
       if (!rot[r][c]) continue;
       const row = active.y + r; const col = active.x + c;
-      if (row >= 0 && row < BOARD_ROWS && col >= 0 && col < BOARD_COLS)
+      if (row >= -ROWS_ABOVE && row < BOARD_ROWS && col >= 0 && col < BOARD_COLS)
         drawCell(ctx, bx + col * cellSize, by + row * cellSize, cellSize, color);
     }
   }
 }
 
-function drawBoardBorder(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number): void {
-  ctx.strokeStyle = '#3a3a6a';
+// Left, right and bottom edges only: like TETR.IO the well is open at the top,
+// so pieces drop in from the spawn rows above without crossing a line.
+function drawBoardBorder(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, color = '#3a3a6a'): void {
+  ctx.strokeStyle = color;
   ctx.lineWidth = 1;
-  ctx.strokeRect(x, y, w, h);
+  ctx.beginPath();
+  ctx.moveTo(x, y); ctx.lineTo(x, y + h); ctx.lineTo(x + w, y + h); ctx.lineTo(x + w, y);
+  ctx.stroke();
 }
 
 // ---- Per-mode board draw functions ----
@@ -302,7 +338,10 @@ function drawBoard(ctx: CanvasRenderingContext2D, state: GameState): void {
   drawLockedCells(ctx, state.board, BOARD_OFFSET_X, BOARD_OFFSET_Y, CELL_SIZE);
   if (state.mode !== 'editor')
     drawActivePiece(ctx, state.active, state.board, BOARD_OFFSET_X, BOARD_OFFSET_Y, CELL_SIZE);
-  drawBoardBorder(ctx, BOARD_OFFSET_X, BOARD_OFFSET_Y, BOARD_W, BOARD_H);
+  const border = state.mode === 'playing'
+    ? drawDanger(ctx, state.board, state.nextQueue[0], BOARD_OFFSET_X, BOARD_OFFSET_Y, CELL_SIZE)
+    : undefined;
+  drawBoardBorder(ctx, BOARD_OFFSET_X, BOARD_OFFSET_Y, BOARD_W, BOARD_H, border);
 }
 
 function drawHoldBox(ctx: CanvasRenderingContext2D, hold: PieceType | null, holdUsed: boolean): void {
@@ -488,14 +527,15 @@ function drawBvbBoard(
   ctx.fillStyle = '#888899';
   ctx.font = '11px monospace';
   ctx.textAlign = 'center';
-  ctx.fillText(label, bx + BVB_W / 2, by - 6);
+  ctx.fillText(label, bx + BVB_W / 2, by - ROWS_ABOVE * BVB_CELL - 6);
 
   ctx.fillStyle = '#0a0a1e';
   ctx.fillRect(bx, by, BVB_W, BVB_H);
   drawGrid(ctx, bx, by, BOARD_COLS, BOARD_ROWS, BVB_CELL);
   drawLockedCells(ctx, bot.board, bx, by, BVB_CELL);
-  if (!bot.dead) drawActivePiece(ctx, bot.active, bot.board, bx, by, BVB_CELL);
-  drawBoardBorder(ctx, bx, by, BVB_W, BVB_H);
+  drawActivePiece(ctx, bot.active, bot.board, bx, by, BVB_CELL);
+  const border = bot.dead ? undefined : drawDanger(ctx, bot.board, bot.nextQueue[0], bx, by, BVB_CELL);
+  drawBoardBorder(ctx, bx, by, BVB_W, BVB_H, border);
 
   const sy = by + BVB_H + 14;
   ctx.fillStyle = '#666688';
@@ -583,14 +623,15 @@ function drawBotSection(ctx: CanvasRenderingContext2D, data: VersusData, botName
   ctx.fillStyle = '#888899';
   ctx.font = '11px monospace';
   ctx.textAlign = 'center';
-  ctx.fillText(shortName, BOT_BOARD_X + BOT_BOARD_W / 2, BOT_BOARD_Y - 6);
+  ctx.fillText(shortName, BOT_BOARD_X + BOT_BOARD_W / 2, BOT_BOARD_Y - ROWS_ABOVE * BOT_CELL_SIZE - 6);
 
   ctx.fillStyle = '#0a0a1e';
   ctx.fillRect(BOT_BOARD_X, BOT_BOARD_Y, BOT_BOARD_W, BOT_BOARD_H);
   drawGrid(ctx, BOT_BOARD_X, BOT_BOARD_Y, BOARD_COLS, BOARD_ROWS, BOT_CELL_SIZE);
   drawLockedCells(ctx, bot.board, BOT_BOARD_X, BOT_BOARD_Y, BOT_CELL_SIZE);
-  if (!bot.dead) drawActivePiece(ctx, bot.active, bot.board, BOT_BOARD_X, BOT_BOARD_Y, BOT_CELL_SIZE);
-  drawBoardBorder(ctx, BOT_BOARD_X, BOT_BOARD_Y, BOT_BOARD_W, BOT_BOARD_H);
+  drawActivePiece(ctx, bot.active, bot.board, BOT_BOARD_X, BOT_BOARD_Y, BOT_CELL_SIZE);
+  const border = bot.dead ? undefined : drawDanger(ctx, bot.board, bot.nextQueue[0], BOT_BOARD_X, BOT_BOARD_Y, BOT_CELL_SIZE);
+  drawBoardBorder(ctx, BOT_BOARD_X, BOT_BOARD_Y, BOT_BOARD_W, BOT_BOARD_H, border);
 
   const statsY = BOT_BOARD_Y + BOT_BOARD_H + 14;
   ctx.fillStyle = '#666688';
@@ -610,8 +651,9 @@ function drawWatchBoard(ctx: CanvasRenderingContext2D, bot: BotBoard): void {
   ctx.fillRect(BOARD_OFFSET_X, BOARD_OFFSET_Y, BOARD_W, BOARD_H);
   drawGrid(ctx, BOARD_OFFSET_X, BOARD_OFFSET_Y, BOARD_COLS, BOARD_ROWS, CELL_SIZE);
   drawLockedCells(ctx, bot.board, BOARD_OFFSET_X, BOARD_OFFSET_Y, CELL_SIZE);
-  if (!bot.dead) drawActivePiece(ctx, bot.active, bot.board, BOARD_OFFSET_X, BOARD_OFFSET_Y, CELL_SIZE);
-  drawBoardBorder(ctx, BOARD_OFFSET_X, BOARD_OFFSET_Y, BOARD_W, BOARD_H);
+  drawActivePiece(ctx, bot.active, bot.board, BOARD_OFFSET_X, BOARD_OFFSET_Y, CELL_SIZE);
+  const border = bot.dead ? undefined : drawDanger(ctx, bot.board, bot.nextQueue[0], BOARD_OFFSET_X, BOARD_OFFSET_Y, CELL_SIZE);
+  drawBoardBorder(ctx, BOARD_OFFSET_X, BOARD_OFFSET_Y, BOARD_W, BOARD_H, border);
 }
 
 function drawAiBanner(
@@ -672,7 +714,7 @@ function drawWatchHUD(ctx: CanvasRenderingContext2D, bot: BotBoard, botName = 'B
   ctx.fillStyle = '#888899';
   ctx.font = '11px monospace';
   ctx.textAlign = 'center';
-  ctx.fillText(shortName, BOARD_OFFSET_X + BOARD_W / 2, BOARD_OFFSET_Y - 6);
+  ctx.fillText(shortName, BOARD_OFFSET_X + BOARD_W / 2, BOARD_OFFSET_Y - ROWS_ABOVE * CELL_SIZE - 6);
   drawHints(ctx, ['R: new game', 'Esc: menu']);
 }
 

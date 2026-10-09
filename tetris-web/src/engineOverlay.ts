@@ -3,14 +3,14 @@ import type { EngineAnalysis, EngineMove } from './engine';
 import { PIECE_COLORS, getRotation } from './pieces';
 import { SPIN_NONE, clearLabel as rulesClearLabel } from './rules';
 import { CELL_SIZE, BOARD_OFFSET_X, BOARD_OFFSET_Y } from './editor';
-import { BOARD_COLS, BOARD_ROWS } from './board';
-import { BOARD_W, BOARD_H, CANVAS_W, CANVAS_H, VERSUS_CANVAS_W } from './renderer';
+import { BOARD_COLS, BOARD_ROWS, bufferOf } from './board';
+import { BOARD_W, BOARD_H, CANVAS_W, VERSUS_CANVAS_W } from './renderer';
 
 // Notation panel in the unused right region of the canvas
 const PANEL_X = CANVAS_W + 8;
 const PANEL_Y = BOARD_OFFSET_Y;
 const PANEL_W = VERSUS_CANVAS_W - PANEL_X - 8;
-const PANEL_H = CANVAS_H - BOARD_OFFSET_Y * 2;
+const PANEL_H = BOARD_H;
 
 const COMPACT_ROW_H    = 22;
 const MOVE_ROW_H       = 18;
@@ -103,9 +103,10 @@ function drawAnimatedBoard(
   }
 
   // 3. Locked cells from the board state at this frame
+  const off = bufferOf(boardAtFrame);
   for (let r = 0; r < BOARD_ROWS; r++) {
     for (let c = 0; c < BOARD_COLS; c++) {
-      const cell = boardAtFrame[r][c];
+      const cell = boardAtFrame[r + off][c];
       if (!cell) continue;
       const color = PIECE_COLORS[cell as keyof typeof PIECE_COLORS];
       drawOverlayCell(ctx, BOARD_OFFSET_X + c * CELL_SIZE, BOARD_OFFSET_Y + r * CELL_SIZE, 1, color);
@@ -132,7 +133,12 @@ function drawAnimatedBoard(
   ctx.globalAlpha = 1;
   ctx.strokeStyle = '#3a3a6a';
   ctx.lineWidth = 1;
-  ctx.strokeRect(BOARD_OFFSET_X, BOARD_OFFSET_Y, BOARD_W, BOARD_H);
+  ctx.beginPath();
+  ctx.moveTo(BOARD_OFFSET_X, BOARD_OFFSET_Y);
+  ctx.lineTo(BOARD_OFFSET_X, BOARD_OFFSET_Y + BOARD_H);
+  ctx.lineTo(BOARD_OFFSET_X + BOARD_W, BOARD_OFFSET_Y + BOARD_H);
+  ctx.lineTo(BOARD_OFFSET_X + BOARD_W, BOARD_OFFSET_Y);
+  ctx.stroke();
 
   // 6. Move counter at the top of the board
   ctx.fillStyle = 'rgba(8,8,15,0.80)';

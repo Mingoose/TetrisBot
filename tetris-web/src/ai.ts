@@ -108,11 +108,13 @@ for (const type of ALL_PIECE_TYPES) {
 }
 
 // Convert a CellValue[][] board to a bitmask board.  Called once at search entry.
+// A game board's buffer rows above the visible field are left out (board.ts).
 function cellBoardToBm(board: CellValue[][]): Uint16Array {
   const bm = new Uint16Array(BOARD_ROWS);
+  const off = board.length - BOARD_ROWS;
   for (let r = 0; r < BOARD_ROWS; r++) {
     for (let c = 0; c < BOARD_COLS; c++) {
-      if (board[r][c] !== 0) bm[r] |= (1 << c);
+      if (board[r + off][c] !== 0) bm[r] |= (1 << c);
     }
   }
   return bm;

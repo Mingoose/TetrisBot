@@ -153,7 +153,7 @@ check('S-spin mini triple sends 2', resolveClear(-1, -1, 3, SPIN_MINI, false).at
   check('garbage still travelling does not land', [r.outcome.garbageIn, me.pendingGarbage], [0, 10]);
   r = handleLock(me, them, emptyBoard(), 0, SPIN_NONE, 400);
   check('cap: 8 of 10 rows land', [r.outcome.garbageIn, filledRows(r.board), me.pendingGarbage], [8, 8, 2]);
-  check('rows of one attack share a hole column', new Set(r.board.slice(12).map(row => row.indexOf(0))).size, 1);
+  check('rows of one attack share a hole column', new Set(r.board.slice(-8).map(row => row.indexOf(0))).size, 1);
   r = handleLock(me, them, r.board, 0, SPIN_NONE, 500);
   check('the rest lands on the next lock', [r.outcome.garbageIn, me.pendingGarbage], [2, 0]);
 

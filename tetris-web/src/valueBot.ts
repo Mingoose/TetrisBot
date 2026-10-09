@@ -7,8 +7,7 @@
 
 import type { CellValue, PieceType } from './types';
 import type { BotBoard, CombatState } from './versus';
-import { BOARD_COLS, BOARD_ROWS } from './board';
-import { spawnPiece } from './game';
+import { BOARD_COLS, BOARD_ROWS, spawnPosition } from './board';
 import { resolveClear, RULES } from './rules';
 import { bmCollides, bmLockAndClear, cellBoardToBm, findReachablePlacements } from './ai';
 import { ALL_PIECE_TYPES } from './pieces';
@@ -286,11 +285,13 @@ function withGarbage(after: Uint16Array, cols: number[]): Uint16Array {
   return b;
 }
 
-// Game over after landing garbage under `after`: a block in the top two rows
-// (board.ts isGameOver) or the next piece can't spawn.
+// The bot's own, stricter top-out model, which the net was trained with: a
+// block in the top two visible rows after garbage lands, or the next piece
+// blocked at the top of the visible field. The game itself only ends on a
+// TETR.IO block out or lock out (board.ts), above the visible field.
 function topsOut(after: Uint16Array, landingCols: number[], next: PieceType): boolean {
   const n = landingCols.length;
   for (let r = 0; r < n; r++) if (after[r]) return true; // pushed off the top
   const b = withGarbage(after, landingCols);
-  return b[0] !== 0 || b[1] !== 0 || bmCollides(b, spawnPiece(next), 0, 0);
+  return b[0] !== 0 || b[1] !== 0 || bmCollides(b, { ...spawnPosition(next), y: 0 }, 0, 0);
 }

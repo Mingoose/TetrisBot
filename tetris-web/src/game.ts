@@ -5,15 +5,15 @@ import {
   collides,
   lockPiece,
   clearLines,
-  isGameOver,
+  isLockOut,
+  spawnOrBlockOut,
+  spawnPosition,
   scoreForLines,
   gravityInterval,
   hardDropY,
   attemptRotationWithKick,
   detectSpin,
-  BOARD_COLS,
 } from './board';
-import { getRotation } from './pieces';
 import { SpinKind, isTstKick } from './rules';
 import { Bag } from './bag';
 import { pushHistory, rewind } from './rewind';
@@ -90,10 +90,9 @@ export function initGameState(variant: GameVariant): GameState {
   };
 }
 
+// A new piece at its spawn position above the field (board.ts spawnPosition).
 export function spawnPiece(type: PieceType): ActivePiece {
-  const rotation = getRotation(type, 0);
-  const x = Math.floor((BOARD_COLS - rotation[0].length) / 2);
-  return { type, rotationIndex: 0, x, y: 0 };
+  return spawnPosition(type);
 }
 
 function isGrounded(state: GameState): boolean {
@@ -172,7 +171,7 @@ function lockAndSpawn(state: GameState): void {
     return;
   }
 
-  if (isGameOver(state.board)) {
+  if (isLockOut(landedPiece, linesCleared)) {
     state.mode = 'gameover';
     return;
   }
@@ -183,14 +182,14 @@ function lockAndSpawn(state: GameState): void {
   state.nextQueue.push(bag.next());
   state.bagState = bag.getState();
 
-  state.active = spawnPiece(nextType);
   state.holdUsed = false;
   resetTransientState(state);
 
-  // Immediate game-over: new piece spawns into filled cells
-  if (collides(state.board, state.active, 0, 0)) {
-    state.mode = 'gameover';
-  }
+  // Block out: the new piece has nowhere to appear (garbage may have pushed
+  // the stack into its spawn). It is left overlapping so the cause is visible.
+  const spawned = spawnOrBlockOut(state.board, nextType, linesCleared > 0);
+  state.active = spawned ?? spawnPiece(nextType);
+  if (!spawned) state.mode = 'gameover';
 }
 
 function tryMove(state: GameState, dx: number, dy: number): boolean {
@@ -224,6 +223,7 @@ function tryHold(state: GameState): void {
   state.active = spawnPiece(incoming);
   resetTransientState(state);
   state.lastActionRotation = false;
+  if (collides(state.board, state.active, 0, 0)) state.mode = 'gameover'; // block out
 }
 
 function hardDrop(state: GameState): void {

@@ -3,14 +3,31 @@ import { getRotation, getKicks } from './pieces';
 import { SpinKind, T_CORNERS, T_FRONT_CORNERS, classifySpin } from './rules';
 
 export const BOARD_COLS = 10;
-export const BOARD_ROWS = 20;
+export const BOARD_ROWS = 20;   // visible rows
+// Hidden rows above the visible field (TETR.IO: 20). Game boards are
+// BUFFER_ROWS + BOARD_ROWS rows, but piece coordinates stay in the visible
+// frame: row 0 is the top visible row and the buffer is rows -1 .. -BUFFER_ROWS.
+// Board functions take either a full board or a 20-row visible one (the AI,
+// harness and value net work on the visible rows) and index it as
+// board[row + bufferOf(board)].
+export const BUFFER_ROWS = 20;
 
-export function emptyBoard(): CellValue[][] {
-  return Array.from({ length: BOARD_ROWS }, () => new Array(BOARD_COLS).fill(0) as CellValue[]);
+export function emptyBoard(rows = BUFFER_ROWS + BOARD_ROWS): CellValue[][] {
+  return Array.from({ length: rows }, () => new Array(BOARD_COLS).fill(0) as CellValue[]);
+}
+
+// Number of buffer rows stored above the visible field (0 for a visible-only board).
+export function bufferOf(board: CellValue[][]): number {
+  return board.length - BOARD_ROWS;
+}
+
+// The 20 visible rows, for the AI, the value net and uploaded AIs.
+export function visibleRows(board: CellValue[][]): CellValue[][] {
+  return board.slice(bufferOf(board));
 }
 
 // Check if placing `active` at (active.x + dx, active.y + dy) collides with
-// board walls or any filled cell.
+// board walls or any filled cell. Rows above the stored board count as empty.
 export function collides(
   board: CellValue[][],
   active: ActivePiece,
@@ -20,6 +37,7 @@ export function collides(
   const rotation = getRotation(active.type, active.rotationIndex);
   const newX = active.x + dx;
   const newY = active.y + dy;
+  const off = bufferOf(board);
   for (let r = 0; r < rotation.length; r++) {
     for (let c = 0; c < rotation[r].length; c++) {
       if (!rotation[r][c]) continue;
@@ -27,7 +45,7 @@ export function collides(
       const row = newY + r;
       if (col < 0 || col >= BOARD_COLS) return true;
       if (row >= BOARD_ROWS) return true;
-      if (row >= 0 && board[row][col] !== 0) return true;
+      if (row >= -off && board[row + off][col] !== 0) return true;
     }
   }
   return false;
@@ -44,13 +62,14 @@ export function hardDropY(board: CellValue[][], active: ActivePiece): number {
 export function lockPiece(board: CellValue[][], active: ActivePiece): CellValue[][] {
   const rotation = getRotation(active.type, active.rotationIndex);
   const newBoard = board.map(row => [...row]);
+  const off = bufferOf(board);
   for (let r = 0; r < rotation.length; r++) {
     for (let c = 0; c < rotation[r].length; c++) {
       if (!rotation[r][c]) continue;
       const row = active.y + r;
       const col = active.x + c;
-      if (row >= 0 && row < BOARD_ROWS && col >= 0 && col < BOARD_COLS) {
-        newBoard[row][col] = active.type as PieceType;
+      if (row >= -off && row < BOARD_ROWS && col >= 0 && col < BOARD_COLS) {
+        newBoard[row + off][col] = active.type as PieceType;
       }
     }
   }
@@ -60,62 +79,46 @@ export function lockPiece(board: CellValue[][], active: ActivePiece): CellValue[
 // Remove completed lines and return the new board + count of lines cleared.
 export function clearLines(board: CellValue[][]): { board: CellValue[][]; linesCleared: number } {
   const remaining = board.filter(row => row.some(cell => cell === 0));
-  const linesCleared = BOARD_ROWS - remaining.length;
+  const linesCleared = board.length - remaining.length;
   const newRows: CellValue[][] = Array.from({ length: linesCleared }, () =>
     new Array(BOARD_COLS).fill(0) as CellValue[],
   );
   return { board: [...newRows, ...remaining], linesCleared };
 }
 
-// Combined lock + clear optimised for the AI beam search.
-// Only deep-copies the 2–4 rows the piece touches instead of all 20,
-// and only checks those rows for full-line detection.
-export function lockAndClear(
-  board: CellValue[][],
-  active: ActivePiece,
-): { board: CellValue[][]; linesCleared: number } {
-  const rotation = getRotation(active.type, active.rotationIndex);
+// ---- Top-out (TETR.IO, as in Triangle.js) ----
 
-  // Shallow-copy the outer array; deep-copy only rows the piece writes to.
-  const newBoard: CellValue[][] = board.slice();
-  for (let pr = 0; pr < rotation.length; pr++) {
-    const row = active.y + pr;
-    if (row < 0 || row >= BOARD_ROWS) continue;
-    if (!rotation[pr].some(c => c !== 0)) continue;
-    newBoard[row] = board[row].slice();
-    for (let pc = 0; pc < rotation[pr].length; pc++) {
-      if (!rotation[pr][pc]) continue;
-      const col = active.x + pc;
-      if (col >= 0 && col < BOARD_COLS) newBoard[row][col] = active.type as PieceType;
-    }
-  }
+// Where a new piece appears: centred, its spawn-state bounding box starting
+// three rows above the field, so its lowest cells sit two rows above row 0.
+export const SPAWN_Y = -3;
 
-  // Find full lines (only touched rows can become full).
-  let fullMask = 0; // bitmask of rows 0–19 that are full (up to 4 can be set)
-  let linesCleared = 0;
-  for (let pr = 0; pr < rotation.length; pr++) {
-    const row = active.y + pr;
-    if (row < 0 || row >= BOARD_ROWS) continue;
-    let full = true;
-    for (let c = 0; c < BOARD_COLS; c++) { if (newBoard[row][c] === 0) { full = false; break; } }
-    if (full) { fullMask |= (1 << row); linesCleared++; }
-  }
-
-  if (linesCleared === 0) return { board: newBoard, linesCleared: 0 };
-
-  // Rebuild board: linesCleared empty rows on top, then surviving rows in order.
-  const result: CellValue[][] = new Array(BOARD_ROWS);
-  for (let i = 0; i < linesCleared; i++) result[i] = new Array<CellValue>(BOARD_COLS).fill(0);
-  let wi = linesCleared;
-  for (let r = 0; r < BOARD_ROWS; r++) {
-    if (!(fullMask & (1 << r))) result[wi++] = newBoard[r];
-  }
-  return { board: result, linesCleared };
+export function spawnPosition(type: PieceType): ActivePiece {
+  const width = getRotation(type, 0)[0].length;
+  return { type, rotationIndex: 0, x: Math.floor((BOARD_COLS - width) / 2), y: SPAWN_Y };
 }
 
-// Game over if any cell in the top two rows is filled after a lock.
-export function isGameOver(board: CellValue[][]): boolean {
-  return board[0].some(c => c !== 0) || board[1].some(c => c !== 0);
+// Block out: a new piece can't appear where it spawns. Clutch: right after a
+// line clear the piece may instead appear higher, at the first free row above
+// its spawn. Returns the piece to play, or null when the player has topped out.
+export function spawnOrBlockOut(board: CellValue[][], type: PieceType, afterClear: boolean): ActivePiece | null {
+  const piece = spawnPosition(type);
+  if (!collides(board, piece, 0, 0)) return piece;
+  if (!afterClear) return null;
+  for (let y = piece.y - 1; y >= -bufferOf(board); y--) {
+    if (!collides(board, piece, 0, y - piece.y)) return { ...piece, y };
+  }
+  return null;
+}
+
+// Lock out: a piece that locks entirely above the visible field without
+// clearing a line tops the player out.
+export function isLockOut(piece: ActivePiece, linesCleared: number): boolean {
+  if (linesCleared > 0) return false;
+  const rotation = getRotation(piece.type, piece.rotationIndex);
+  for (let r = 0; r < rotation.length; r++) {
+    if (rotation[r].some(c => c !== 0) && piece.y + r >= 0) return false;
+  }
+  return true;
 }
 
 // Scoring per Tetris guideline
@@ -174,12 +177,13 @@ export function detectSpin(
   if (!rotatedLast) return 0;
   let corners = 0;
   let front = 0;
+  const off = bufferOf(board);
   if (piece.type === 'T') {
     const [f0, f1] = T_FRONT_CORNERS[piece.rotationIndex];
     for (let i = 0; i < 4; i++) {
       const r = piece.y + T_CORNERS[i][0];
       const c = piece.x + T_CORNERS[i][1];
-      if (r < 0 || r >= BOARD_ROWS || c < 0 || c >= BOARD_COLS || board[r][c] !== 0) {
+      if (r < -off || r >= BOARD_ROWS || c < 0 || c >= BOARD_COLS || board[r + off][c] !== 0) {
         corners++;
         if (i === f0 || i === f1) front++;
       }

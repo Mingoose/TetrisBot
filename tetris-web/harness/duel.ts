@@ -26,6 +26,7 @@ import { fileURLToPath } from 'node:url';
 
 import { initBotVsBotData, applyBotMove, botBagMask, bvbLookahead, BotBoard, CombatState } from '../src/versus';
 import { findBestMoveHard } from '../src/ai';
+import { visibleRows } from '../src/board';
 import { ValueNet, ValueNetFile } from '../src/valueNet';
 import type { PieceType } from '../src/types';
 import { searchDeep, searchStateFor, SearchResult } from '../src/valueBot';
@@ -111,7 +112,7 @@ function playGame(cfg: Config, gameId: number, bots: [Think, Think], rec?: Recor
     const now = stats[s].pieces * interval;
     const bot = boards[s], combat = combats[s];
     const before = rec && {
-      board: Uint16Array.from(bot.board.map(row => row.reduce<number>((m, c, i) => (c ? m | (1 << i) : m), 0))),
+      board: Uint16Array.from(visibleRows(bot.board).map(row => row.reduce<number>((m, c, i) => (c ? m | (1 << i) : m), 0))),
       active: pieceIdx(bot.active.type), hold: pieceIdx(bot.hold),
       queue: bot.nextQueue.slice(0, 5).map(pieceIdx), bagMask: botBagMask(bot),
       combo: combat.combo, b2b: combat.b2b, incoming: combat.pendingGarbage,

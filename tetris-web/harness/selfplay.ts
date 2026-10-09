@@ -30,7 +30,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import type { CellValue, PieceType } from '../src/types';
-import { BOARD_COLS, BOARD_ROWS, collides, hardDropY } from '../src/board';
+import { BOARD_COLS, BOARD_ROWS, collides, hardDropY, visibleRows } from '../src/board';
 import { getRotation } from '../src/pieces';
 import { initVersusData, applyBotMove, receiveGarbage, BotBoard, CombatState, LockOutcome } from '../src/versus';
 import { findBestMoveHard, setWeights } from '../src/ai';
@@ -104,7 +104,8 @@ function gameSeed(seed: number, gameId: number): number {
 
 const pieceIdx = (p: PieceType | null): number => (p ? PIECE_ORDER.indexOf(p) : NO_PIECE);
 
-function boardToBits(board: CellValue[][]): Uint16Array {
+function boardToBits(full: CellValue[][]): Uint16Array {
+  const board = visibleRows(full); // records hold the visible rows only
   const bits = new Uint16Array(BOARD_ROWS);
   for (let r = 0; r < BOARD_ROWS; r++) {
     let m = 0;

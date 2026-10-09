@@ -1,13 +1,14 @@
 import { GameState, CellValue } from './types';
 import { pushHistory } from './rewind';
-import { BOARD_COLS, BOARD_ROWS } from './board';
+import { BOARD_COLS, BOARD_ROWS, bufferOf } from './board';
 
 // Must match LOCK_DELAY_MS in game.ts (not imported to avoid circular dependency).
 const LOCK_DELAY_MS = 500;
 
 export const CELL_SIZE = 30;
+export const ROWS_ABOVE = 3;       // buffer rows drawn above the field, where pieces spawn (board.ts SPAWN_Y)
 export const BOARD_OFFSET_X = 120; // pixels from canvas left to board left edge
-export const BOARD_OFFSET_Y = 20;  // pixels from canvas top to board top edge
+export const BOARD_OFFSET_Y = 20 + ROWS_ABOVE * CELL_SIZE; // pixels from canvas top to board top edge
 
 let paintMode: 'on' | 'off' | null = null;
 let isMouseDown = false;
@@ -18,7 +19,7 @@ export function setupEditor(canvas: HTMLCanvasElement, state: GameState): void {
     isMouseDown = true;
     const { row, col } = pixelToCell(canvas, e);
     if (!inBounds(row, col)) return;
-    paintMode = state.board[row][col] === 0 ? 'on' : 'off';
+    paintMode = state.board[row + bufferOf(state.board)][col] === 0 ? 'on' : 'off';
     toggleCell(state, row, col);
   });
 
@@ -26,7 +27,7 @@ export function setupEditor(canvas: HTMLCanvasElement, state: GameState): void {
     if (state.mode !== 'editor' || !isMouseDown || paintMode === null) return;
     const { row, col } = pixelToCell(canvas, e);
     if (!inBounds(row, col)) return;
-    const isEmpty = state.board[row][col] === 0;
+    const isEmpty = state.board[row + bufferOf(state.board)][col] === 0;
     if (paintMode === 'on' && isEmpty) toggleCell(state, row, col);
     if (paintMode === 'off' && !isEmpty) toggleCell(state, row, col);
   });
@@ -56,8 +57,9 @@ function inBounds(row: number, col: number): boolean {
 }
 
 function toggleCell(state: GameState, row: number, col: number): void {
-  const current = state.board[row][col];
-  (state.board[row][col] as CellValue) = current === 0 ? 'X' : 0;
+  const r = row + bufferOf(state.board);
+  const current = state.board[r][col];
+  (state.board[r][col] as CellValue) = current === 0 ? 'X' : 0;
 }
 
 // Call when entering editor mode from playing
