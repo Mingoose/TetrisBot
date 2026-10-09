@@ -9,6 +9,7 @@ import { CELL_SIZE, BOARD_OFFSET_X, BOARD_OFFSET_Y, ROWS_ABOVE } from './editor'
 import { VersusData, BotBoard, BotVsBotData } from './versus';
 import { MAX_HISTORY } from './rewind';
 import { KeyBindings, DEFAULT_KEYBINDINGS, keyLabel } from './settings';
+import { RULES, SPIN_NONE, resolveClear } from './rules';
 
 const GRID_COLOR = '#1e1e3a';
 const BG_COLOR = '#0d0d1a';
@@ -52,6 +53,24 @@ const MENU_ROW2_START = MENU_CX - (3 * BTN_W + 2 * BTN_GAP) / 2;
 export const MENU_WATCH_BTN:  ButtonRect = { x: MENU_ROW2_START,                         y: MENU_ROW2_Y, w: BTN_W, h: BTN_H };
 export const MENU_BVB_BTN:    ButtonRect = { x: MENU_ROW2_START + BTN_W + BTN_GAP,       y: MENU_ROW2_Y, w: BTN_W, h: BTN_H };
 export const MENU_UPLOAD_BTN: ButtonRect = { x: MENU_ROW2_START + 2 * (BTN_W + BTN_GAP), y: MENU_ROW2_Y, w: BTN_W, h: BTN_H };
+
+// "← MENU" button in the top-left corner of every screen except the menu.
+export const MENU_BACK_BTN: ButtonRect = { x: 10, y: 10, w: 84, h: 26 };
+
+export function drawBackButton(ctx: CanvasRenderingContext2D, pressed: boolean): void {
+  const r = MENU_BACK_BTN;
+  ctx.fillStyle = pressed ? '#2a2a4a' : PANEL_BG;
+  ctx.fillRect(r.x, r.y, r.w, r.h);
+  ctx.strokeStyle = pressed ? '#7777bb' : '#3a3a6a';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
+  ctx.fillStyle = pressed ? '#ffffff' : '#aaaacc';
+  ctx.font = '12px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('← MENU', r.x + r.w / 2, r.y + r.h / 2 + 1);
+  ctx.textBaseline = 'alphabetic';
+}
 
 // Game review: "SEE BEST MOVE / HIDE BEST MOVE" button — placed below classification badge
 // Classification badge starts at HOLD_Y+100+104=254, delta at +18=272; button at +36=290
@@ -327,6 +346,16 @@ function drawActivePiece(
 
 // Left, right and bottom edges only: like TETR.IO the well is open at the top,
 // so pieces drop in from the spawn rows above without crossing a line.
+// B2B chain readout for versus HUDs: nothing below B2B ×1; from RULES.surgeAt
+// the chain is charged, and the label shows the surge it releases when broken.
+function drawB2b(ctx: CanvasRenderingContext2D, level: number, x: number, y: number, font: string): void {
+  if (level < 1) return;
+  const surge = resolveClear(-1, level, 1, SPIN_NONE, false).surge;
+  ctx.fillStyle = level >= RULES.surgeAt ? '#ff66cc' : '#bb88ff';
+  ctx.font = font;
+  ctx.fillText(surge > 0 ? `B2B ×${level}  surge ${surge}` : `B2B ×${level}`, x, y);
+}
+
 function drawBoardBorder(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, color = '#3a3a6a'): void {
   ctx.strokeStyle = color;
   ctx.lineWidth = 1;
@@ -437,6 +466,8 @@ function drawHUD(ctx: CanvasRenderingContext2D, state: GameState, versusData: Ve
       ctx.textAlign = 'left';
       ctx.fillText(`${combo + 1}× combo`, x, startY + 52);
     }
+    ctx.textAlign = 'left';
+    drawB2b(ctx, versusData ? versusData.playerCombat.b2b : -1, x, startY + 72, 'bold 13px monospace');
     drawHints(ctx, [
       `${keyLabel(kb.rewind)}: restart`,
       `${keyLabel(kb.pause)}: pause`,
@@ -559,6 +590,7 @@ function drawBvbBoard(
     const short = aiName.length > 20 ? aiName.substring(0, 18) + '…' : aiName;
     ctx.fillText(short, bx + BVB_W / 2, sy + 30);
   }
+  drawB2b(ctx, combat.b2b, bx + BVB_W / 2, sy + 44, 'bold 11px monospace');
 }
 
 function drawBvbResult(ctx: CanvasRenderingContext2D, winner: 'bot1' | 'bot2' | 'draw' | null): void {
@@ -650,6 +682,8 @@ function drawBotSection(ctx: CanvasRenderingContext2D, data: VersusData, botName
     ctx.font = 'bold 11px monospace';
     ctx.fillText(`${combo + 1}× combo`, BOT_BOARD_X + BOT_BOARD_W / 2, statsY + 16);
   }
+  ctx.textAlign = 'center';
+  drawB2b(ctx, data.botCombat.b2b, BOT_BOARD_X + BOT_BOARD_W / 2, statsY + 32, 'bold 11px monospace');
 }
 
 function drawWatchBoard(ctx: CanvasRenderingContext2D, bot: BotBoard): void {

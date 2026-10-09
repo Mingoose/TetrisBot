@@ -20,8 +20,12 @@ export function createInputState(): InputState {
   };
 }
 
-export function setupInput(canvas: HTMLCanvasElement, input: InputState): void {
-  canvas.addEventListener('keydown', (e) => {
+// Keys are read from the whole window, so the game works without the canvas
+// having focus. `accepts` filters key presses (e.g. typing in a form field);
+// releases always count so no key gets stuck down.
+export function setupInput(input: InputState, accepts: (e: KeyboardEvent) => boolean): void {
+  window.addEventListener('keydown', (e) => {
+    if (!accepts(e)) return;
     if (!input.keys.has(e.code)) {
       input.justPressed.add(e.code);
     }
@@ -32,7 +36,7 @@ export function setupInput(canvas: HTMLCanvasElement, input: InputState): void {
     }
   });
 
-  canvas.addEventListener('keyup', (e) => {
+  window.addEventListener('keyup', (e) => {
     input.keys.delete(e.code);
     input.justReleased.add(e.code);
     if (e.code === 'ArrowLeft') input.dasLeft = 0;

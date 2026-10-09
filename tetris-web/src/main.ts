@@ -14,13 +14,14 @@ import { setupSettingsUI } from './settingsUI';
 import { GameVariant } from './types';
 import { VersusData, BotVsBotData, BotBoard, CombatState, initVersusData, initBotVsBotData, applyBotMove, requestBotMove, setupPlayerLockHook } from './versus';
 import { drawEngineOverlay } from './engineOverlay';
+import { setupRulesPanel, isRulesPanelOpen, closeRulesPanel } from './rulesInfo';
 import { gameStateToEngineRequest } from './engine';
 import type { EngineAnalysis } from './engine';
 import { lockPiece, clearLines } from './board';
 import type { CellValue, Snapshot } from './types';
 import { setPreLockCallback } from './game';
 import type { SprintReplay, ReplayEntry, VersusReplay, VersusReplayEntry, BotSnapshot } from './replay';
-import { drawReplayScreen, drawVersusReplayScreen, drawReviewScreen, drawVersusReviewScreen, drawGameReviewScreen, drawVersusGameReviewScreen, GAME_REVIEW_BTN } from './renderer';
+import { drawReplayScreen, drawVersusReplayScreen, drawReviewScreen, drawVersusReviewScreen, drawGameReviewScreen, drawVersusGameReviewScreen, GAME_REVIEW_BTN, MENU_BACK_BTN, drawBackButton } from './renderer';
 import type { EngineRequest } from './engine';
 import type { ClassificationResult } from './moveQuality';
 import { classifyMove } from './moveQuality';
@@ -37,7 +38,23 @@ const state = initGameState('creative');
 state.mode = 'menu';
 
 const input = createInputState();
-setupInput(canvas, input);
+// Game keys count unless they're typed into a form field or a popup is open
+// (the popups handle their own keys, e.g. Escape to close them; the settings
+// modal stops its keys from reaching the window). A key pressed while a button
+// such as SETTINGS still has focus goes to the game instead of pressing it again.
+const POPUP_IDS = ['auth-overlay', 'ai-manager', 'ai-picker', 'bvb-setup', 'rules-panel'];
+setupInput(input, (e) => {
+  const t = e.target;
+  if (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement ||
+      (t instanceof HTMLElement && t.isContentEditable)) return false;
+  const popupOpen = POPUP_IDS.some(id => {
+    const el = document.getElementById(id);
+    return el !== null && el.style.display !== 'none';
+  });
+  if (popupOpen) return false;
+  if (t instanceof HTMLButtonElement) { e.preventDefault(); t.blur(); }
+  return true;
+});
 setupEditor(canvas, state);
 
 // ---- Saved AI persistence ----
@@ -913,13 +930,39 @@ document.getElementById('bvb-start-btn')!.addEventListener('click', () => {
   startBotVsBot();
 });
 
+setupRulesPanel();
+
 document.addEventListener('keydown', (e) => {
   const picker = document.getElementById('ai-picker')!;
   const bvbSetupEl = document.getElementById('bvb-setup')!;
   if (e.key === 'Escape') {
+    if (isRulesPanelOpen()) { closeRulesPanel(); return; } // back to the picker
     if (picker.style.display !== 'none') { closeAiPicker(); return; }
     if (bvbSetupEl.style.display !== 'none') { closeBvbSetup(); return; }
     if (document.getElementById('ai-manager')!.style.display !== 'none') { closeAiManager(); return; }
+  }
+});
+
+// Leave any game, replay or review for the main menu, as Escape does from a
+// pause; the game loop tears down the mode once state.mode is 'menu'.
+function returnToMenu(): void {
+  replayMode = false;
+  versusReplayMode = false;
+  exitReviewMode();
+  exitGameReview();
+  state.mode = 'menu';
+}
+
+// "← MENU" button click handler
+canvas.addEventListener('click', (e) => {
+  if (state.mode === 'menu') return;
+  const rect = canvas.getBoundingClientRect();
+  const mx = (e.clientX - rect.left) * (VERSUS_CANVAS_W / rect.width);
+  const my = (e.clientY - rect.top)  * (CANVAS_H / rect.height);
+  const btn = MENU_BACK_BTN;
+  if (mx >= btn.x && mx <= btn.x + btn.w && my >= btn.y && my <= btn.y + btn.h) {
+    e.stopImmediatePropagation(); // don't also hit a button on the menu that replaces this screen
+    returnToMenu();
   }
 });
 
@@ -947,6 +990,7 @@ canvas.addEventListener('mousedown', (e) => {
       if (hit(btn)) { pressedBtn = btn; return; }
     }
   }
+  if (state.mode !== 'menu' && hit(MENU_BACK_BTN)) { pressedBtn = MENU_BACK_BTN; return; }
   if ((sprintGameReviewMode || versusGameReviewMode) && hit(GAME_REVIEW_BTN)) {
     pressedBtn = GAME_REVIEW_BTN;
   }
@@ -1052,7 +1096,13 @@ async function startGame(userId: string): Promise<void> {
     });
     document.body.appendChild(signOutBtn);
 
+    // Every screen but the menu gets the "← MENU" button drawn on top.
     function gameLoop(timestamp: number): void {
+      frame(timestamp);
+      if (state.mode !== 'menu') drawBackButton(ctx, pressedBtn === MENU_BACK_BTN);
+    }
+
+    function frame(timestamp: number): void {
     const dt = prevTimestamp === 0 ? 0 : Math.min(timestamp - prevTimestamp, 100);
     prevTimestamp = timestamp;
 

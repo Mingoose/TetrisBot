@@ -22,7 +22,7 @@ VITE_SUPABASE_ANON_KEY=...
 
 ### Architecture
 
-Twenty-five TypeScript source files in `src/`, each with a single responsibility:
+Twenty-six TypeScript source files in `src/`, each with a single responsibility:
 
 **Core game engine:**
 - **`types.ts`** — All shared interfaces: `GameState`, `Snapshot`, `ActivePiece`, `CellValue`, `GameMode`, `GameVariant`
@@ -31,7 +31,7 @@ Twenty-five TypeScript source files in `src/`, each with a single responsibility
 - **`rules.ts`** — TETR.IO multiplayer rules, the single source of truth for spins and attack: `classifySpin` (All-Mini+), `resolveClear` (attack table, multiplier combos, B2B level + surge, all clears), `clearLabel`. Mirrors Triangle.js (github.com/halp1/triangle); `npm run test:rules` checks it against that implementation
 - **`bag.ts`** — 7-bag randomizer with `getState()`/`restoreState()` for snapshot-accurate rewind
 - **`game.ts`** — Game loop (`processFrame`), gravity, DAS/ARR, lock delay, `lockAndSpawn`, hold, hard drop, sprint completion; `setLockHook()` for versus mode callbacks
-- **`input.ts`** — Keyboard event handler; `flushInput()` clears per-frame edge state each loop
+- **`input.ts`** — Keyboard event handler on `window` (no canvas focus needed; `main.ts` filters out form fields and open popups); `flushInput()` clears per-frame edge state each loop
 - **`rewind.ts`** — `pushHistory`/`rewind`: snapshots taken pre-lock in `lockAndSpawn`; one undo = one piece; max 50 snapshots
 
 **AI engine (Web Worker pipeline):**
@@ -50,6 +50,7 @@ Twenty-five TypeScript source files in `src/`, each with a single responsibility
 - **`editor.ts`** — Board editor mode (creative only); click/drag toggles cells; `CELL_SIZE`/`BOARD_OFFSET_*` constants used by renderer
 - **`renderer.ts`** — All Canvas 2D drawing; full redraw each frame; ghost piece, hold, next queue (5 pieces), HUD, overlays, sprint/versus complete screens
 - **`engineOverlay.ts`** — Canvas overlay rendered during creative pause; animates the selected engine line on the board + shows a notation panel listing all lines with scores and clear labels
+- **`rulesInfo.ts`** — The "?" Versus Rules panel opened from the AI picker; plain-language rules whose numbers are computed from `rules.ts`
 - **`settings.ts`** — `KeyBindings` interface, `Settings` type (keybindings + DAS/ARR + sonicDrop toggle), `keyLabel()` helper
 - **`settingsUI.ts`** — Modal overlay for keybinding remapping, DAS/ARR sliders, sonic drop toggle, save/cancel/reset flow
 - **`storage.ts`** — `StorageAdapter` interface + `LocalStorageAdapter` (localStorage); `loadSettings()` merges saved with defaults
@@ -70,6 +71,8 @@ Twenty-five TypeScript source files in `src/`, each with a single responsibility
 **Value net weights:** `public/models/value_net.json` (config, label scaling, tensor offsets) + `value_net.bin` (float32 weights), written by `training/export_value_ts.py CKPT --app ../tetris-web/public/models`. Currently `rank_v2_c16`. The experimental difficulty sends `{ valueNet: widths, searchMs, state }` (built in the main thread by `requestBotMove`, since garbage readiness uses that thread's clock) instead of the beam-search message.
 
 **Web Worker AI:** `ai.worker.ts` runs beam search off the main thread. `main.ts` posts requests via `requestBotMove()` (from `versus.ts`) and receives responses with the chosen move. Engine analysis for creative pause uses a separate `type:'analyze'` message path and returns `EngineAnalysis` with `topN` ranked lines.
+
+**Versus HUD:** shows combo and, from B2B ×1, the B2B chain; at `RULES.surgeAt` it turns pink and shows the surge a break would release.
 
 **Versus garbage:** `versus.ts` owns garbage exchange (`handleLock()`, `receiveGarbage()`, `CombatState`), using `rules.ts` for the attack itself and the garbage settings (`RULES.garbageCap`, `garbageSpeedMs`, messiness). TETR.IO behaviour: a clearing lock attacks, cancelling queued garbage oldest-first and sending the rest; only a lock that clears nothing lets garbage land, at most `garbageCap` rows, and only chunks that have finished travelling. `CombatState.incoming` is the queue and `pendingGarbage` its total (only `versus.ts` should modify either). `CombatState.b2b` is a level (-1 = none), not a flag, because surge depends on it.
 
