@@ -261,13 +261,15 @@ function drawLockedCells(
 }
 
 // TETR.IO-style danger warning: once the stack is within DANGER_ROWS of the
-// top, outline where the next piece will appear (red where it is blocked, which
-// means a block out on the next lock unless it clears a line) and turn the
-// border red. Returns the border colour to use.
+// top the border turns red. If the next piece's spawn is already blocked (a
+// block out on the next lock unless it clears a line), its spawn cells are
+// also shaded faintly, except where the current piece covers them.
+// Returns the border colour to use.
 const DANGER_ROWS = 4;
 function drawDanger(
   ctx: CanvasRenderingContext2D,
   board: CellValue[][],
+  active: ActivePiece,
   next: PieceType | undefined,
   bx: number, by: number,
   cellSize: number,
@@ -275,16 +277,20 @@ function drawDanger(
   const off = bufferOf(board);
   let danger = false;
   for (let r = 0; r < off + DANGER_ROWS && !danger; r++) danger = board[r].some(c => c !== 0);
-  if (!danger || !next) return undefined;
-  const piece = spawnPosition(next);
-  const blocked = collides(board, piece, 0, 0);
-  const rot = getRotation(piece.type, 0);
-  ctx.strokeStyle = blocked ? '#ff3344' : '#ff9944';
-  ctx.lineWidth = 2;
-  for (let r = 0; r < rot.length; r++) {
-    for (let c = 0; c < rot[r].length; c++) {
-      if (!rot[r][c]) continue;
-      ctx.strokeRect(bx + (piece.x + c) * cellSize + 2, by + (piece.y + r) * cellSize + 2, cellSize - 4, cellSize - 4);
+  if (!danger) return undefined;
+  const piece = next && spawnPosition(next);
+  if (piece && collides(board, piece, 0, 0)) {
+    const activeRot = getRotation(active.type, active.rotationIndex);
+    const coversCell = (row: number, col: number) =>
+      activeRot[row - active.y]?.[col - active.x] === 1;
+    const rot = getRotation(piece.type, 0);
+    ctx.fillStyle = 'rgba(255, 51, 68, 0.18)';
+    for (let r = 0; r < rot.length; r++) {
+      for (let c = 0; c < rot[r].length; c++) {
+        const row = piece.y + r, col = piece.x + c;
+        if (!rot[r][c] || coversCell(row, col)) continue;
+        ctx.fillRect(bx + col * cellSize + 1, by + row * cellSize + 1, cellSize - 2, cellSize - 2);
+      }
     }
   }
   return '#ff3344';
@@ -339,7 +345,7 @@ function drawBoard(ctx: CanvasRenderingContext2D, state: GameState): void {
   if (state.mode !== 'editor')
     drawActivePiece(ctx, state.active, state.board, BOARD_OFFSET_X, BOARD_OFFSET_Y, CELL_SIZE);
   const border = state.mode === 'playing'
-    ? drawDanger(ctx, state.board, state.nextQueue[0], BOARD_OFFSET_X, BOARD_OFFSET_Y, CELL_SIZE)
+    ? drawDanger(ctx, state.board, state.active, state.nextQueue[0], BOARD_OFFSET_X, BOARD_OFFSET_Y, CELL_SIZE)
     : undefined;
   drawBoardBorder(ctx, BOARD_OFFSET_X, BOARD_OFFSET_Y, BOARD_W, BOARD_H, border);
 }
@@ -534,7 +540,7 @@ function drawBvbBoard(
   drawGrid(ctx, bx, by, BOARD_COLS, BOARD_ROWS, BVB_CELL);
   drawLockedCells(ctx, bot.board, bx, by, BVB_CELL);
   drawActivePiece(ctx, bot.active, bot.board, bx, by, BVB_CELL);
-  const border = bot.dead ? undefined : drawDanger(ctx, bot.board, bot.nextQueue[0], bx, by, BVB_CELL);
+  const border = bot.dead ? undefined : drawDanger(ctx, bot.board, bot.active, bot.nextQueue[0], bx, by, BVB_CELL);
   drawBoardBorder(ctx, bx, by, BVB_W, BVB_H, border);
 
   const sy = by + BVB_H + 14;
@@ -630,7 +636,7 @@ function drawBotSection(ctx: CanvasRenderingContext2D, data: VersusData, botName
   drawGrid(ctx, BOT_BOARD_X, BOT_BOARD_Y, BOARD_COLS, BOARD_ROWS, BOT_CELL_SIZE);
   drawLockedCells(ctx, bot.board, BOT_BOARD_X, BOT_BOARD_Y, BOT_CELL_SIZE);
   drawActivePiece(ctx, bot.active, bot.board, BOT_BOARD_X, BOT_BOARD_Y, BOT_CELL_SIZE);
-  const border = bot.dead ? undefined : drawDanger(ctx, bot.board, bot.nextQueue[0], BOT_BOARD_X, BOT_BOARD_Y, BOT_CELL_SIZE);
+  const border = bot.dead ? undefined : drawDanger(ctx, bot.board, bot.active, bot.nextQueue[0], BOT_BOARD_X, BOT_BOARD_Y, BOT_CELL_SIZE);
   drawBoardBorder(ctx, BOT_BOARD_X, BOT_BOARD_Y, BOT_BOARD_W, BOT_BOARD_H, border);
 
   const statsY = BOT_BOARD_Y + BOT_BOARD_H + 14;
@@ -652,7 +658,7 @@ function drawWatchBoard(ctx: CanvasRenderingContext2D, bot: BotBoard): void {
   drawGrid(ctx, BOARD_OFFSET_X, BOARD_OFFSET_Y, BOARD_COLS, BOARD_ROWS, CELL_SIZE);
   drawLockedCells(ctx, bot.board, BOARD_OFFSET_X, BOARD_OFFSET_Y, CELL_SIZE);
   drawActivePiece(ctx, bot.active, bot.board, BOARD_OFFSET_X, BOARD_OFFSET_Y, CELL_SIZE);
-  const border = bot.dead ? undefined : drawDanger(ctx, bot.board, bot.nextQueue[0], BOARD_OFFSET_X, BOARD_OFFSET_Y, CELL_SIZE);
+  const border = bot.dead ? undefined : drawDanger(ctx, bot.board, bot.active, bot.nextQueue[0], BOARD_OFFSET_X, BOARD_OFFSET_Y, CELL_SIZE);
   drawBoardBorder(ctx, BOARD_OFFSET_X, BOARD_OFFSET_Y, BOARD_W, BOARD_H, border);
 }
 
