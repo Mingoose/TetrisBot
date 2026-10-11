@@ -201,6 +201,36 @@
       justify-content: center;
       align-items: center;
     }
+    /* Bot speed presets (AI picker, bot-vs-bot setup) */
+    #ai-picker-speed .speed-picker { padding: 12px 20px 16px; border-top: 1px solid #2a2a4a; }
+    .speed-head {
+      display: flex;
+      justify-content: space-between;
+      font-size: 10px;
+      color: #666688;
+      letter-spacing: 2px;
+      margin-bottom: 8px;
+    }
+    .speed-caption { letter-spacing: 0; color: #8888aa; }
+    .speed-options { display: flex; gap: 4px; }
+    .speed-btn {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 2px;
+      background: #14142a;
+      border: 1px solid #2a2a4a;
+      color: #8888aa;
+      font-family: monospace;
+      padding: 6px 0;
+      cursor: pointer;
+    }
+    .speed-btn:hover { background: #1c1c3a; border-color: #5555aa; color: #aaaacc; }
+    .speed-btn.selected { background: #1c1c42; border-color: #7777dd; color: #ffffff; }
+    .speed-name { font-size: 11px; }
+    .speed-pps { font-size: 10px; color: #555577; }
+    .speed-btn.selected .speed-pps { color: #aaaaff; }
     /* Versus rules overlay (above the AI picker) */
     #rules-panel {
       position: fixed;
@@ -342,6 +372,7 @@
         <button class="ai-info-btn" id="rules-open-btn" title="Versus rules">?</button>
       </div>
       <div class="ai-list" id="ai-picker-list" style="max-height:400px"></div>
+      <div id="ai-picker-speed"></div>
     </div>
   </div>
 

@@ -1,4 +1,4 @@
-import { Settings, KeyBindings, ACTION_LABELS, keyLabel, DEFAULT_KEYBINDINGS, DEFAULT_DAS, DEFAULT_ARR, DEFAULT_SONIC_DROP, DEFAULT_BOT_PPS } from './settings';
+import { Settings, KeyBindings, ACTION_LABELS, keyLabel, DEFAULT_KEYBINDINGS, DEFAULT_DAS, DEFAULT_ARR, DEFAULT_SONIC_DROP } from './settings';
 import { saveSettings } from './storage';
 import { GameState } from './types';
 
@@ -9,7 +9,6 @@ let pendingBindings: KeyBindings = { ...DEFAULT_KEYBINDINGS };
 let pendingDas = DEFAULT_DAS;
 let pendingArr = DEFAULT_ARR;
 let pendingSonicDrop = DEFAULT_SONIC_DROP;
-let pendingBotPps = DEFAULT_BOT_PPS;
 let modalEl: HTMLElement | null = null;
 let prevMode: GameState['mode'] = 'playing';
 
@@ -55,7 +54,6 @@ function openModal(gameState: GameState, getSettings: () => Settings): void {
   pendingDas = s.das;
   pendingArr = s.arr;
   pendingSonicDrop = s.sonicDrop;
-  pendingBotPps = s.botPps;
   listeningFor = null;
   prevMode = gameState.mode;
   if (gameState.mode === 'playing') gameState.mode = 'paused';
@@ -127,12 +125,6 @@ function createModal(
     slidersEl.appendChild(makeSlider('DAS — delay before auto-repeat', 'ms', 0, 300, 1, () => pendingDas, (v) => { pendingDas = v; }));
     slidersEl.appendChild(makeSlider('ARR — speed during auto-repeat', 'ms', 0, 100, 1, () => pendingArr, (v) => { pendingArr = v; }));
     slidersEl.appendChild(makeToggle('Sonic drop — soft drop snaps to bottom', () => pendingSonicDrop, (v) => { pendingSonicDrop = v; }));
-
-    const versusTitle = document.createElement('h3');
-    versusTitle.textContent = 'Versus';
-    Object.assign(versusTitle.style, { margin: '18px 0 10px', fontSize: '14px', color: '#aaaaff' });
-    slidersEl.appendChild(versusTitle);
-    slidersEl.appendChild(makeSlider('Bot speed — pieces per second', 'pps', 0.5, 2, 0.1, () => pendingBotPps, (v) => { pendingBotPps = v; }));
   }
   refreshSliders();
 
@@ -151,7 +143,6 @@ function createModal(
     pendingDas = DEFAULT_DAS;
     pendingArr = DEFAULT_ARR;
     pendingSonicDrop = DEFAULT_SONIC_DROP;
-    pendingBotPps = DEFAULT_BOT_PPS;
     listeningFor = null;
     refreshRows();
     refreshSliders();
@@ -162,7 +153,7 @@ function createModal(
 
   const saveBtn = makeButton('Save', '#2a2a6a', '#aaaaff');
   saveBtn.addEventListener('click', async () => {
-    const newSettings: Settings = { keybindings: { ...pendingBindings }, das: pendingDas, arr: pendingArr, sonicDrop: pendingSonicDrop, botPps: pendingBotPps };
+    const newSettings: Settings = { keybindings: { ...pendingBindings }, das: pendingDas, arr: pendingArr, sonicDrop: pendingSonicDrop };
     onSettingsChange(newSettings);
     await saveSettings(userId, newSettings);
     closeModal(gameState);

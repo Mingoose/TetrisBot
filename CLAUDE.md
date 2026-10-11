@@ -22,7 +22,7 @@ VITE_SUPABASE_ANON_KEY=...
 
 ### Architecture
 
-Twenty-six TypeScript source files in `src/`, each with a single responsibility:
+Twenty-seven TypeScript source files in `src/`, each with a single responsibility:
 
 **Core game engine:**
 - **`types.ts`** — All shared interfaces: `GameState`, `Snapshot`, `ActivePiece`, `CellValue`, `GameMode`, `GameVariant`
@@ -50,6 +50,7 @@ Twenty-six TypeScript source files in `src/`, each with a single responsibility:
 - **`editor.ts`** — Board editor mode (creative only); click/drag toggles cells; `CELL_SIZE`/`BOARD_OFFSET_*` constants used by renderer
 - **`renderer.ts`** — All Canvas 2D drawing; full redraw each frame; ghost piece, hold, next queue (5 pieces), HUD, overlays, sprint/versus complete screens
 - **`engineOverlay.ts`** — Canvas overlay rendered during creative pause; animates the selected engine line on the board + shows a notation panel listing all lines with scores and clear labels
+- **`botSpeed.ts`** — Bot speed presets (Relaxed 0.5 … Blitz 3 PPS), chosen in the AI picker (versus, watch) and per bot in the bot-vs-bot setup; remembered per mode in localStorage; `searchBudgetMs()` fits the value-net bot's thinking time to the speed
 - **`rulesInfo.ts`** — The "?" Versus Rules panel opened from the AI picker; plain-language rules whose numbers are computed from `rules.ts`
 - **`settings.ts`** — `KeyBindings` interface, `Settings` type (keybindings + DAS/ARR + sonicDrop toggle), `keyLabel()` helper
 - **`settingsUI.ts`** — Modal overlay for keybinding remapping, DAS/ARR sliders, sonic drop toggle, save/cancel/reset flow
@@ -71,6 +72,8 @@ Twenty-six TypeScript source files in `src/`, each with a single responsibility:
 **Value net weights:** `public/models/value_net.json` (config, label scaling, tensor offsets) + `value_net.bin` (float32 weights), written by `training/export_value_ts.py CKPT --app ../tetris-web/public/models`. Currently `rank_v2_c16`. The experimental difficulty sends `{ valueNet: widths, searchMs, state }` (built in the main thread by `requestBotMove`, since garbage readiness uses that thread's clock) instead of the beam-search message.
 
 **Web Worker AI:** `ai.worker.ts` runs beam search off the main thread. `main.ts` posts requests via `requestBotMove()` (from `versus.ts`) and receives responses with the chosen move. Engine analysis for creative pause uses a separate `type:'analyze'` message path and returns `EngineAnalysis` with `topN` ranked lines.
+
+**Bot speed:** not a global setting. `main.ts` keeps `botPps` per slot (`versus`, `watch`, `bvb1`, `bvb2`) and `selParams(sel, pps)` cuts the experimental bot's `searchMs` to 85% of the time per piece, so it plays at the chosen speed (shallower search when fast). The HUD shows each bot's speed.
 
 **Versus HUD:** shows combo and, from B2B ×1, the B2B chain; at `RULES.surgeAt` it turns pink and shows the surge a break would release.
 

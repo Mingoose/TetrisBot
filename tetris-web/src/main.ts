@@ -15,6 +15,7 @@ import { GameVariant } from './types';
 import { VersusData, BotVsBotData, BotBoard, CombatState, initVersusData, initBotVsBotData, applyBotMove, requestBotMove, setupPlayerLockHook } from './versus';
 import { drawEngineOverlay } from './engineOverlay';
 import { setupRulesPanel, isRulesPanelOpen, closeRulesPanel } from './rulesInfo';
+import { SpeedSlot, loadSpeed, saveSpeed, searchBudgetMs, speedPickerEl } from './botSpeed';
 import { gameStateToEngineRequest } from './engine';
 import type { EngineAnalysis } from './engine';
 import { lockPiece, clearLines } from './board';
@@ -112,8 +113,13 @@ function selLabel(sel: AiSelection): string {
   return sel.kind === 'builtin' ? AI_DIFFICULTY_PARAMS[sel.difficulty].label : sel.name;
 }
 
-function selParams(sel: AiSelection): typeof AI_DIFFICULTY_PARAMS[AiDifficulty] | undefined {
-  return sel.kind === 'builtin' ? AI_DIFFICULTY_PARAMS[sel.difficulty] : undefined;
+// Search parameters for a built-in bot playing at `pps`: the value-net bot's
+// thinking time is cut to fit the time per piece, so it plays at the chosen
+// speed (searching less deep when fast) instead of falling behind it.
+function selParams(sel: AiSelection, pps: number): typeof AI_DIFFICULTY_PARAMS[AiDifficulty] | undefined {
+  if (sel.kind !== 'builtin') return undefined;
+  const params = AI_DIFFICULTY_PARAMS[sel.difficulty];
+  return params.searchMs ? { ...params, searchMs: searchBudgetMs(params.searchMs, pps) } : params;
 }
 
 function createBlobWorker(code: string): Worker {
@@ -155,6 +161,15 @@ let versusAiSel: AiSelection = { ...defaultSel };
 let watchAiSel: AiSelection = { ...defaultSel };
 let bvbAiSel1: AiSelection = { ...defaultSel };
 let bvbAiSel2: AiSelection = { ...defaultSel };
+
+// Bot speeds in pieces per second, chosen alongside each AI (botSpeed.ts).
+const botPps: Record<SpeedSlot, number> = {
+  versus: loadSpeed('versus'), watch: loadSpeed('watch'), bvb1: loadSpeed('bvb1'), bvb2: loadSpeed('bvb2'),
+};
+function setBotPps(slot: SpeedSlot, pps: number): void {
+  botPps[slot] = pps;
+  saveSpeed(slot, pps);
+}
 let valueNetReady = false;
 
 // ---- Engine analysis state ----
@@ -577,7 +592,7 @@ function wireWorker(w: Worker): void {
 function requestMoveWithTimeout(bot: BotBoard, combat: CombatState): void {
   const w = getAiWorker();
   const sel = state.variant === 'versus' ? versusAiSel : watchAiSel;
-  const aiParams = customAiWorker ? undefined : selParams(sel);
+  const aiParams = customAiWorker ? undefined : selParams(sel, botPps[state.variant === 'versus' ? 'versus' : 'watch']);
   requestBotMove(w, bot, combat, aiParams);
   if (botMoveTimeout) clearTimeout(botMoveTimeout);
   botMoveTimeout = setTimeout(() => {
@@ -622,7 +637,7 @@ function stopBvbWorkers(): void {
 
 function requestBvbBot1Move(bot: BotBoard, combat: CombatState): void {
   if (!bvbWorker1) return;
-  requestBotMove(bvbWorker1, bot, combat, selParams(bvbAiSel1));
+  requestBotMove(bvbWorker1, bot, combat, selParams(bvbAiSel1, botPps.bvb1));
 }
 
 function startBotVsBot(): void {
@@ -657,7 +672,7 @@ function startBotVsBot(): void {
   };
 
   requestBvbBot1Move(botVsBotData.bot1, botVsBotData.bot1Combat);
-  requestBotMove(bvbWorker2, botVsBotData.bot2, botVsBotData.bot2Combat, selParams(bvbAiSel2));
+  requestBotMove(bvbWorker2, botVsBotData.bot2, botVsBotData.bot2Combat, selParams(bvbAiSel2, botPps.bvb2));
 }
 
 // ---- Game start helpers ----
@@ -703,13 +718,26 @@ function startWatchGame(): void {
 
 let aiPickerCallback: ((sel: AiSelection) => void) | null = null;
 
-function openAiPicker(title: string, current: AiSelection, onSelect: (sel: AiSelection) => void): void {
+// `speedSlot`: also show the speed presets for that slot (versus / watch; the
+// bot-vs-bot setup has its own per-bot speed rows).
+function openAiPicker(title: string, current: AiSelection, onSelect: (sel: AiSelection) => void, speedSlot?: SpeedSlot): void {
   document.getElementById('ai-picker-title')!.textContent = title;
   aiPickerCallback = onSelect;
   renderAiPickerList(current);
+  renderPickerSpeed(speedSlot);
   document.getElementById('ai-picker')!.style.display = 'flex';
   canvas.blur();
   loadSavedAIs().then(() => { if (aiPickerCallback === onSelect) renderAiPickerList(current); });
+}
+
+function renderPickerSpeed(slot?: SpeedSlot): void {
+  const el = document.getElementById('ai-picker-speed')!;
+  el.innerHTML = '';
+  if (!slot) return;
+  el.appendChild(speedPickerEl('BOT SPEED', botPps[slot], (pps) => {
+    setBotPps(slot, pps);
+    renderPickerSpeed(slot);
+  }));
 }
 
 function closeAiPicker(): void {
@@ -813,12 +841,12 @@ function renderBvbSetup(): void {
   const body = document.getElementById('bvb-setup-body')!;
   body.innerHTML = '';
 
-  const sels: [AiSelection, (s: AiSelection) => void, string][] = [
-    [bvbAiSel1, (s) => { bvbAiSel1 = s; }, 'BOT 1'],
-    [bvbAiSel2, (s) => { bvbAiSel2 = s; }, 'BOT 2'],
+  const sels: [AiSelection, (s: AiSelection) => void, string, SpeedSlot][] = [
+    [bvbAiSel1, (s) => { bvbAiSel1 = s; }, 'BOT 1', 'bvb1'],
+    [bvbAiSel2, (s) => { bvbAiSel2 = s; }, 'BOT 2', 'bvb2'],
   ];
 
-  for (const [sel, setSel, label] of sels) {
+  for (const [sel, setSel, label, slot] of sels) {
     const row = document.createElement('div');
     row.className = 'bvb-slot-row';
 
@@ -839,6 +867,10 @@ function renderBvbSetup(): void {
     row.appendChild(labelEl);
     row.appendChild(btn);
     body.appendChild(row);
+    body.appendChild(speedPickerEl(label + ' SPEED', botPps[slot], (pps) => {
+      setBotPps(slot, pps);
+      renderBvbSetup();
+    }));
   }
 }
 
@@ -1022,7 +1054,7 @@ canvas.addEventListener('click', (e) => {
     openAiPicker('WATCH AI', watchAiSel, (sel) => {
       watchAiSel = sel;
       startWatchGame();
-    });
+    }, 'watch');
     return;
   }
 
@@ -1033,7 +1065,7 @@ canvas.addEventListener('click', (e) => {
     openAiPicker('VERSUS AI', versusAiSel, (sel) => {
       versusAiSel = sel;
       startVersusGame();
-    });
+    }, 'versus');
     return;
   }
   if (!variant) return;
@@ -1602,7 +1634,8 @@ async function startGame(userId: string): Promise<void> {
         : state.mode === 'playing';
       if (botActive) {
         versusData.botThinkAccumMs += dt;
-        const msPerPiece = 1000 / settings.botPps;
+        const pps = botPps[state.variant === 'versus' ? 'versus' : 'watch'];
+        const msPerPiece = 1000 / pps;
         while (versusData.botThinkAccumMs >= msPerPiece && !versusData.bot.dead) {
           if (versusData.pendingMove === null) break; // wait for worker
           versusData.botThinkAccumMs -= msPerPiece;
@@ -1629,20 +1662,21 @@ async function startGame(userId: string): Promise<void> {
         }
         if (!versusData.bot.dead && versusData.pendingMove === null &&
             versusData.botThinkAccumMs >= msPerPiece && customAiWorker && !customAiWarning && !customAiError) {
-          customAiWarning = `AI is too slow for ${settings.botPps} PPS — move computation is taking longer than ${(1000 / settings.botPps).toFixed(0)} ms`;
+          customAiWarning = `AI is too slow for ${pps} PPS — move computation is taking longer than ${msPerPiece.toFixed(0)} ms; pick a slower speed`;
         }
       }
     }
 
     // Step bot-vs-bot
     if (state.variant === 'botvsbot' && state.mode === 'playing' && botVsBotData) {
-      const msPerPiece = 1000 / settings.botPps;
+      const msPerPiece1 = 1000 / botPps.bvb1;
+      const msPerPiece2 = 1000 / botPps.bvb2;
       botVsBotData.bot1ThinkAccumMs += dt;
       botVsBotData.bot2ThinkAccumMs += dt;
 
-      while (botVsBotData.bot1ThinkAccumMs >= msPerPiece && !botVsBotData.bot1.dead) {
+      while (botVsBotData.bot1ThinkAccumMs >= msPerPiece1 && !botVsBotData.bot1.dead) {
         if (!botVsBotData.pendingMove1) break;
-        botVsBotData.bot1ThinkAccumMs -= msPerPiece;
+        botVsBotData.bot1ThinkAccumMs -= msPerPiece1;
         const m = botVsBotData.pendingMove1; botVsBotData.pendingMove1 = null;
         const bvbResult = applyBotMove(m, botVsBotData.bot1, botVsBotData.bot1Combat, botVsBotData.bot2Combat);
         if (bvbResult && customAiName && !customAiError) {
@@ -1654,21 +1688,21 @@ async function startGame(userId: string): Promise<void> {
           requestBvbBot1Move(botVsBotData.bot1, botVsBotData.bot1Combat);
       }
       if (!botVsBotData.bot1.dead && !botVsBotData.pendingMove1 &&
-          botVsBotData.bot1ThinkAccumMs >= msPerPiece && !customAiWarning && !customAiError) {
-        customAiWarning = `Bot 1 (${selLabel(bvbAiSel1)}) is too slow for ${settings.botPps} PPS — reduce PPS in settings`;
+          botVsBotData.bot1ThinkAccumMs >= msPerPiece1 && !customAiWarning && !customAiError) {
+        customAiWarning = `Bot 1 (${selLabel(bvbAiSel1)}) is too slow for ${botPps.bvb1} PPS — pick a slower speed in the bot-vs-bot setup`;
       }
 
-      while (botVsBotData.bot2ThinkAccumMs >= msPerPiece && !botVsBotData.bot2.dead) {
+      while (botVsBotData.bot2ThinkAccumMs >= msPerPiece2 && !botVsBotData.bot2.dead) {
         if (!botVsBotData.pendingMove2) break;
-        botVsBotData.bot2ThinkAccumMs -= msPerPiece;
+        botVsBotData.bot2ThinkAccumMs -= msPerPiece2;
         const m = botVsBotData.pendingMove2; botVsBotData.pendingMove2 = null;
         applyBotMove(m, botVsBotData.bot2, botVsBotData.bot2Combat, botVsBotData.bot1Combat);
         if (!botVsBotData.bot2.dead && bvbWorker2)
-          requestBotMove(bvbWorker2, botVsBotData.bot2, botVsBotData.bot2Combat, selParams(bvbAiSel2));
+          requestBotMove(bvbWorker2, botVsBotData.bot2, botVsBotData.bot2Combat, selParams(bvbAiSel2, botPps.bvb2));
       }
       if (!botVsBotData.bot2.dead && !botVsBotData.pendingMove2 &&
-          botVsBotData.bot2ThinkAccumMs >= msPerPiece && !customAiWarning && !customAiError) {
-        customAiWarning = `Bot 2 (${selLabel(bvbAiSel2)}) is too slow for ${settings.botPps} PPS — reduce PPS in settings`;
+          botVsBotData.bot2ThinkAccumMs >= msPerPiece2 && !customAiWarning && !customAiError) {
+        customAiWarning = `Bot 2 (${selLabel(bvbAiSel2)}) is too slow for ${botPps.bvb2} PPS — pick a slower speed in the bot-vs-bot setup`;
       }
 
       // Winner detection
@@ -1686,7 +1720,8 @@ async function startGame(userId: string): Promise<void> {
       : state.variant === 'watch' ? selLabel(watchAiSel)
       : selLabel(bvbAiSel1);
     const bot2Name = selLabel(bvbAiSel2);
-    draw(ctx, state, versusData, botVsBotData, isAdmin, customAiError, customAiWarning, bot1Name, bot2Name, settings.keybindings, valueNetReady, pressedBtn);
+    const bot1Pps = state.variant === 'versus' ? botPps.versus : state.variant === 'watch' ? botPps.watch : botPps.bvb1;
+    draw(ctx, state, versusData, botVsBotData, isAdmin, customAiError, customAiWarning, bot1Name, bot2Name, settings.keybindings, valueNetReady, pressedBtn, bot1Pps, botPps.bvb2);
     if (engineMode && state.mode === 'paused' && state.variant === 'creative') {
       if (engineAnalysis && engineBoardStates.length > 1) {
         const moveCount = engineBoardStates.length - 1;

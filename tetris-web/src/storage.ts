@@ -1,4 +1,4 @@
-import { Settings, DEFAULT_KEYBINDINGS, DEFAULT_DAS, DEFAULT_ARR, DEFAULT_SONIC_DROP, DEFAULT_BOT_PPS } from './settings';
+import { Settings, DEFAULT_KEYBINDINGS, DEFAULT_DAS, DEFAULT_ARR, DEFAULT_SONIC_DROP } from './settings';
 import { supabase } from './supabase';
 
 // Placeholder until auth lands in Stage 5. Callers will switch to the real UUID.
@@ -50,6 +50,5 @@ export async function loadSettings(userId: string): Promise<Settings> {
     das: saved?.das ?? DEFAULT_DAS,
     arr: saved?.arr ?? DEFAULT_ARR,
     sonicDrop: saved?.sonicDrop ?? DEFAULT_SONIC_DROP,
-    botPps: Math.min(2, Math.max(0.1, saved?.botPps ?? DEFAULT_BOT_PPS)),
   };
 }

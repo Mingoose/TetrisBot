@@ -18,13 +18,11 @@ export interface Settings {
   das: number;              // ms before auto-repeat kicks in
   arr: number;              // ms between repeated moves (0 = instant)
   sonicDrop: boolean;       // soft drop instantly moves to bottom without locking
-  botPps: number;           // versus bot speed in pieces per second
 }
 
 export const DEFAULT_DAS = 133;
 export const DEFAULT_ARR = 10;
 export const DEFAULT_SONIC_DROP = false;
-export const DEFAULT_BOT_PPS = 1.5;
 
 export const DEFAULT_KEYBINDINGS: KeyBindings = {
   moveLeft:  'ArrowLeft',

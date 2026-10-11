@@ -10,6 +10,7 @@ import { VersusData, BotBoard, BotVsBotData } from './versus';
 import { MAX_HISTORY } from './rewind';
 import { KeyBindings, DEFAULT_KEYBINDINGS, keyLabel } from './settings';
 import { RULES, SPIN_NONE, resolveClear } from './rules';
+import { presetName, speedText } from './botSpeed';
 
 const GRID_COLOR = '#1e1e3a';
 const BG_COLOR = '#0d0d1a';
@@ -169,6 +170,8 @@ export function draw(
   keybindings: KeyBindings = DEFAULT_KEYBINDINGS,
   _valueNetReady = false,
   pressedBtn: ButtonRect | null = null,
+  bot1Pps = 1,  // bot speeds (botSpeed.ts), shown next to the bots
+  bot2Pps = 1,
 ): void {
   // Background — fill the full (possibly wider) canvas
   ctx.fillStyle = BG_COLOR;
@@ -180,8 +183,8 @@ export function draw(
   }
 
   if (state.variant === 'botvsbot' && botVsBotData) {
-    drawBvbBoard(ctx, botVsBotData.bot1, BVB_L_X, BVB_Y, 'BOT 1', botVsBotData.bot1Combat, bot1Name);
-    drawBvbBoard(ctx, botVsBotData.bot2, BVB_R_X, BVB_Y, 'BOT 2', botVsBotData.bot2Combat, bot2Name);
+    drawBvbBoard(ctx, botVsBotData.bot1, BVB_L_X, BVB_Y, 'BOT 1', botVsBotData.bot1Combat, bot1Name, bot1Pps);
+    drawBvbBoard(ctx, botVsBotData.bot2, BVB_R_X, BVB_Y, 'BOT 2', botVsBotData.bot2Combat, bot2Name, bot2Pps);
     drawGarbageBar(ctx, botVsBotData.bot1Combat.pendingGarbage, BVB_L_X - 8, BVB_Y, BVB_H, BVB_CELL);
     drawGarbageBar(ctx, botVsBotData.bot2Combat.pendingGarbage, BVB_R_X + BVB_W + 3, BVB_Y, BVB_H, BVB_CELL);
     // VS divider
@@ -207,7 +210,7 @@ export function draw(
     drawWatchBoard(ctx, versusData.bot);
     drawHoldBox(ctx, versusData.bot.hold, versusData.bot.holdUsed);
     drawNextQueue(ctx, versusData.bot.nextQueue);
-    drawWatchHUD(ctx, versusData.bot, bot1Name);
+    drawWatchHUD(ctx, versusData.bot, bot1Name, bot1Pps);
     if (customAiError) drawAiError(ctx, customAiError);
     else if (customAiWarning) drawAiWarning(ctx, customAiWarning);
     if (versusData.bot.dead) drawOverlay(ctx, 'TOPPED OUT', '#ff6666');
@@ -220,7 +223,7 @@ export function draw(
   drawHUD(ctx, state, versusData ?? null, keybindings);
 
   if (versusData) {
-    drawBotSection(ctx, versusData, bot1Name);
+    drawBotSection(ctx, versusData, bot1Name, bot1Pps);
     drawGarbageBar(ctx, versusData.playerCombat.pendingGarbage,
       BOARD_OFFSET_X - 9, BOARD_OFFSET_Y, BOARD_H, CELL_SIZE);
     drawGarbageBar(ctx, versusData.botCombat.pendingGarbage,
@@ -560,6 +563,7 @@ function drawBvbBoard(
   label: string,
   combat: import('./versus').CombatState,
   aiName: string | null = null,
+  pps = 1,
 ): void {
   ctx.fillStyle = '#888899';
   ctx.font = '11px monospace';
@@ -590,7 +594,10 @@ function drawBvbBoard(
     const short = aiName.length > 20 ? aiName.substring(0, 18) + '…' : aiName;
     ctx.fillText(short, bx + BVB_W / 2, sy + 30);
   }
-  drawB2b(ctx, combat.b2b, bx + BVB_W / 2, sy + 44, 'bold 11px monospace');
+  ctx.fillStyle = '#556677';
+  ctx.font = '10px monospace';
+  ctx.fillText(speedText(pps), bx + BVB_W / 2, sy + 44);
+  drawB2b(ctx, combat.b2b, bx + BVB_W / 2, sy + 60, 'bold 11px monospace');
 }
 
 function drawBvbResult(ctx: CanvasRenderingContext2D, winner: 'bot1' | 'bot2' | 'draw' | null): void {
@@ -655,13 +662,17 @@ function drawGarbageBar(
   ctx.fillRect(barX, boardY + boardH - barH, 5, barH);
 }
 
-function drawBotSection(ctx: CanvasRenderingContext2D, data: VersusData, botName = 'BOT'): void {
+function drawBotSection(ctx: CanvasRenderingContext2D, data: VersusData, botName = 'BOT', pps = 1): void {
   const bot = data.bot;
   const shortName = botName.length > 18 ? botName.substring(0, 16) + '…' : botName;
+  const labelY = BOT_BOARD_Y - ROWS_ABOVE * BOT_CELL_SIZE - 6;
   ctx.fillStyle = '#888899';
   ctx.font = '11px monospace';
   ctx.textAlign = 'center';
-  ctx.fillText(shortName, BOT_BOARD_X + BOT_BOARD_W / 2, BOT_BOARD_Y - ROWS_ABOVE * BOT_CELL_SIZE - 6);
+  ctx.fillText(shortName, BOT_BOARD_X + BOT_BOARD_W / 2, labelY - 14);
+  ctx.fillStyle = '#556677';
+  ctx.font = '10px monospace';
+  ctx.fillText(speedText(pps), BOT_BOARD_X + BOT_BOARD_W / 2, labelY);
 
   ctx.fillStyle = '#0a0a1e';
   ctx.fillRect(BOT_BOARD_X, BOT_BOARD_Y, BOT_BOARD_W, BOT_BOARD_H);
@@ -745,10 +756,11 @@ function drawAiError(ctx: CanvasRenderingContext2D, message: string): void {
   drawAiBanner(ctx, message, 'rgba(60,0,0,0.92)', '#882222', '#ff8888');
 }
 
-function drawWatchHUD(ctx: CanvasRenderingContext2D, bot: BotBoard, botName = 'BOT'): void {
+function drawWatchHUD(ctx: CanvasRenderingContext2D, bot: BotBoard, botName = 'BOT', pps = 1): void {
   const x = HOLD_X;
   const startY = HOLD_Y + 100;
   drawHUDEntry(ctx, 'LINES', String(bot.lines), x, startY);
+  drawHUDEntry(ctx, `SPEED · ${presetName(pps).toUpperCase()}`, `${pps} PPS`, x, startY + 52);
   // Show bot name above the board
   const shortName = botName.length > 18 ? botName.substring(0, 16) + '…' : botName;
   ctx.fillStyle = '#888899';
